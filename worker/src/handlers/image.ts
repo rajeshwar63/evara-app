@@ -50,7 +50,7 @@ export async function handleImage(env: Env, message: InboundMessage): Promise<vo
     document_type: ocr.document_type,
     language_detected: ocr.language_detected,
     confidence: ocr.confidence,
-    original_message_id: message.messageId,
+    wa_message_id: message.messageId,
   });
 
   console.log(`[handleImage] Document inserted, updating storage`);

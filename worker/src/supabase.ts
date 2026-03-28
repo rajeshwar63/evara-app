@@ -68,7 +68,7 @@ export async function insertDocument(env: Env, doc: Document): Promise<Document>
  * Insert a reminder record.
  */
 export async function insertReminder(env: Env, reminder: Reminder): Promise<Reminder> {
-  console.log(`[insertReminder] START user_id=${reminder.user_id} task=${reminder.task} remind_at=${reminder.remind_at}`);
+  console.log(`[insertReminder] START user_id=${reminder.user_id} message=${reminder.message} remind_at=${reminder.remind_at}`);
   const res = await fetch(restUrl(env, "reminders"), {
     method: "POST",
     headers: headers(env, { Prefer: "return=representation" }),
