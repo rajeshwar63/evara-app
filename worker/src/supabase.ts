@@ -18,7 +18,7 @@ function restUrl(env: Env, path: string): string {
  */
 export async function upsertUser(env: Env, phone: string): Promise<User> {
   console.log(`[upsertUser] START phone=${phone} url=${restUrl(env, "users")}`);
-  const res = await fetch(restUrl(env, "users"), {
+  const res = await fetch(restUrl(env, "users?on_conflict=phone_number"), {
     method: "POST",
     headers: headers(env, {
       Prefer: "return=representation,resolution=merge-duplicates",
