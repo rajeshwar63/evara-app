@@ -1,0 +1,13 @@
+name = "evara-worker"
+main = "src/index.ts"
+compatibility_date = "2026-03-28"
+
+[[r2_buckets]]
+binding = "EVARA_BUCKET"
+bucket_name = "evara-documents"
+
+[vars]
+SUPABASE_URL = "YOUR_SUPABASE_URL"
+SUPABASE_KEY = "YOUR_SUPABASE_KEY"
+GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+AISENSY_API_KEY = "YOUR_AISENSY_API_KEY"
