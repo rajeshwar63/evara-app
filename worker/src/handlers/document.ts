@@ -58,7 +58,7 @@ export async function handleDocument(env: Env, message: InboundMessage): Promise
     document_type: tags.document_type,
     language_detected: tags.language_detected,
     confidence: tags.confidence,
-    original_message_id: message.messageId,
+    wa_message_id: message.messageId,
   });
 
   console.log(`[handleDocument] Document inserted, updating storage`);

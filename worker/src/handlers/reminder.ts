@@ -20,9 +20,9 @@ export async function handleReminder(env: Env, message: InboundMessage): Promise
   console.log(`[handleReminder] Inserting reminder`);
   await insertReminder(env, {
     user_id: user.id,
-    task: parsed.task,
+    message: parsed.task,
     remind_at: remindAt,
-    status: "pending",
+    sent: false,
     original_text: text,
   });
 

@@ -23,7 +23,7 @@ export async function handleNote(env: Env, message: InboundMessage): Promise<voi
     title,
     extracted_text: text,
     tags: [],
-    original_message_id: message.messageId,
+    wa_message_id: message.messageId,
   });
 
   console.log(`[handleNote] Document inserted, sending reply`);

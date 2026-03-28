@@ -102,9 +102,21 @@ export interface NoteTitleResult {
 export interface User {
   id: string;
   phone_number: string;
-  name?: string;
+  display_name?: string;
+  email?: string;
+  wa_connected?: boolean;
+  wa_connected_at?: string;
+  plan?: string;
+  trial_ends_at?: string;
   storage_used_bytes: number;
+  storage_limit_bytes?: number;
+  reminders_this_month?: number;
+  reminders_monthly_limit?: number;
+  language_pref?: string;
+  family_group_id?: string;
+  is_family_owner?: boolean;
   created_at?: string;
+  updated_at?: string;
 }
 
 // === Supabase Document ===
@@ -112,25 +124,29 @@ export interface User {
 export interface Document {
   id?: string;
   user_id: string;
-  file_key?: string;
+  wa_message_id?: string;
+  message_type: "image" | "document" | "text_note";
   file_url?: string;
+  file_key?: string;
   file_type?: string;
   file_size_bytes?: number;
-  message_type: "image" | "document" | "text_note";
   category?: string;
   title?: string;
+  document_type?: string;
   extracted_text?: string;
-  tags?: string[];
   amount?: string;
+  amount_numeric?: number;
   date_detected?: string;
   expiry_date?: string;
   organization?: string;
   person_name?: string;
-  document_type?: string;
   language_detected?: string;
   confidence?: number;
-  original_message_id?: string;
+  tags?: string[];
+  extra_fields?: Record<string, unknown>;
+  is_starred?: boolean;
   created_at?: string;
+  last_accessed_at?: string;
 }
 
 // === Supabase Reminder ===
@@ -138,10 +154,14 @@ export interface Document {
 export interface Reminder {
   id?: string;
   user_id: string;
-  task: string;
+  document_id?: string;
   remind_at: string;  // ISO timestamp
-  status?: "pending" | "sent";
+  reminder_type?: string;
+  message: string;
   original_text?: string;
+  recurring?: boolean;
+  sent?: boolean;
+  sent_at?: string;
   created_at?: string;
 }
 
