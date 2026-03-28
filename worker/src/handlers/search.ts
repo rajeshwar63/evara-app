@@ -4,10 +4,14 @@ import { getPublicUrl } from "../r2";
 import { sendTextReply, sendMediaReply } from "../whatsapp";
 
 export async function handleSearch(env: Env, message: InboundMessage): Promise<void> {
+  console.log(`[handleSearch] START from=${message.from} text="${message.text}"`);
   const user = await upsertUser(env, message.from);
+  console.log(`[handleSearch] upsertUser done user_id=${user.id}`);
   const query = message.text?.trim() ?? "";
 
+  console.log(`[handleSearch] Searching documents query="${query}"`);
   const results = await searchDocuments(env, user.id, query);
+  console.log(`[handleSearch] Search returned ${results.length} results`);
 
   if (!results.length) {
     await sendTextReply(
