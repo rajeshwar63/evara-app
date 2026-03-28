@@ -1,32 +1,10 @@
-import { InboundMessage, MessageIntent } from "./types";
+import { MessageIntent } from "./types";
 
 const GREETING_PATTERNS = /^(hi|hello|hey|help|start|menu|hola|namaste)$/i;
 
 const REMINDER_PATTERNS =
   /\b(remind|reminder|yaad|yaad dila|alert me|notify me|kal|parso|tomorrow|next week|next month|(\d{1,2})\s*(am|pm)|at\s+\d{1,2})/i;
 
-/**
- * Parse the inbound webhook body flexibly to handle slight variations in AiSensy format.
- */
-export function parseInboundMessage(body: Record<string, unknown>): InboundMessage {
-  return {
-    messageId: (body.messageId ?? body.message_id ?? body.id ?? "") as string,
-    from: (body.from ?? body.sender ?? body.phone ?? body.waId ?? "") as string,
-    type: normalizeMessageType(body),
-    text: (body.text ?? body.message ?? body.body ?? "") as string | undefined,
-    mediaUrl: (body.mediaUrl ?? body.media_url ?? body.MediaUrl ?? "") as string | undefined,
-    mimeType: (body.mimeType ?? body.mime_type ?? "") as string | undefined,
-    fileName: (body.fileName ?? body.file_name ?? "") as string | undefined,
-    timestamp: (body.timestamp ?? new Date().toISOString()) as string,
-  };
-}
-
-function normalizeMessageType(body: Record<string, unknown>): "text" | "image" | "document" {
-  const raw = ((body.type ?? body.messageType ?? "text") as string).toLowerCase();
-  if (raw === "image" || raw === "photo") return "image";
-  if (raw === "document" || raw === "file" || raw === "pdf") return "document";
-  return "text";
-}
 
 /**
  * Detect the intent of a text message.

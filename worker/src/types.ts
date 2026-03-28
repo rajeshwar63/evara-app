@@ -5,20 +5,59 @@ export interface Env {
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
   GEMINI_API_KEY: string;
-  AISENSY_API_KEY: string;
+  META_ACCESS_TOKEN: string;
+  META_PHONE_NUMBER_ID: string;
+  WEBHOOK_VERIFY_TOKEN: string;
 }
 
-// === Inbound Webhook (AiSensy) ===
+// === Inbound Webhook (Meta WhatsApp Cloud API) ===
 
 export interface InboundMessage {
   messageId: string;
-  from: string;        // phone number e.g. "918309421405"
+  from: string;        // phone number e.g. "919398574255"
   type: "text" | "image" | "document";
   text?: string;
-  mediaUrl?: string;
+  mediaId?: string;
   mimeType?: string;
   fileName?: string;
   timestamp?: string;
+}
+
+// === Meta Webhook Types ===
+
+export interface MetaWebhookBody {
+  object: string;
+  entry: MetaWebhookEntry[];
+}
+
+export interface MetaWebhookEntry {
+  id: string;
+  changes: MetaWebhookChange[];
+}
+
+export interface MetaWebhookChange {
+  value: MetaWebhookValue;
+  field: string;
+}
+
+export interface MetaWebhookValue {
+  messaging_product: string;
+  metadata: {
+    phone_number_id: string;
+    display_phone_number: string;
+  };
+  messages?: MetaWebhookMessage[];
+  statuses?: unknown[];
+}
+
+export interface MetaWebhookMessage {
+  from: string;
+  id: string;
+  timestamp: string;
+  type: "text" | "image" | "document" | "audio" | "video" | "sticker" | "location" | "contacts";
+  text?: { body: string };
+  image?: { id: string; mime_type: string; sha256?: string; caption?: string };
+  document?: { id: string; mime_type: string; sha256?: string; filename?: string; caption?: string };
 }
 
 // === Message Intent ===
@@ -119,13 +158,4 @@ export interface SearchResult {
   message_type: string;
   similarity?: number;
   created_at?: string;
-}
-
-// === AiSensy Reply ===
-
-export interface AiSensyReplyOptions {
-  destination: string;
-  message?: string;
-  mediaUrl?: string;
-  mediaFilename?: string;
 }
