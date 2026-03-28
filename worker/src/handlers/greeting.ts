@@ -1,5 +1,5 @@
 import { Env, InboundMessage } from "../types";
-import { sendTextReply } from "../aisensy";
+import { sendTextReply } from "../whatsapp";
 import { WELCOME_MESSAGE } from "../prompts";
 
 export async function handleGreeting(env: Env, message: InboundMessage): Promise<void> {

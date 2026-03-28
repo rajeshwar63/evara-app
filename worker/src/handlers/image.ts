@@ -2,25 +2,18 @@ import { Env, InboundMessage } from "../types";
 import { upsertUser, insertDocument, updateStorageUsed } from "../supabase";
 import { uploadFile } from "../r2";
 import { ocrImage } from "../gemini";
-import { sendTextReply } from "../aisensy";
+import { sendTextReply, downloadWhatsAppMedia } from "../whatsapp";
 
 export async function handleImage(env: Env, message: InboundMessage): Promise<void> {
   const user = await upsertUser(env, message.from);
 
-  if (!message.mediaUrl) {
+  if (!message.mediaId) {
     await sendTextReply(env, message.from, "I couldn't access that image. Please try sending it again.");
     return;
   }
 
-  // Download image from WhatsApp media URL
-  const mediaRes = await fetch(message.mediaUrl);
-  if (!mediaRes.ok) {
-    await sendTextReply(env, message.from, "Failed to download your image. Please try again.");
-    return;
-  }
-
-  const imageBytes = await mediaRes.arrayBuffer();
-  const mimeType = message.mimeType || mediaRes.headers.get("content-type") || "image/jpeg";
+  // Download image from WhatsApp via Meta Cloud API
+  const { data: imageBytes, mimeType } = await downloadWhatsAppMedia(env, message.mediaId);
 
   // Upload to R2
   const { key, size } = await uploadFile(env, user.id, imageBytes, mimeType, message.fileName);

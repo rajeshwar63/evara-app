@@ -1,7 +1,7 @@
 import { Env, InboundMessage } from "../types";
 import { upsertUser, insertDocument } from "../supabase";
 import { generateNoteTitle } from "../gemini";
-import { sendTextReply } from "../aisensy";
+import { sendTextReply } from "../whatsapp";
 
 export async function handleNote(env: Env, message: InboundMessage): Promise<void> {
   const user = await upsertUser(env, message.from);

@@ -1,7 +1,7 @@
 import { Env, InboundMessage } from "../types";
 import { upsertUser, insertReminder } from "../supabase";
 import { parseReminder } from "../gemini";
-import { sendTextReply } from "../aisensy";
+import { sendTextReply } from "../whatsapp";
 
 export async function handleReminder(env: Env, message: InboundMessage): Promise<void> {
   const user = await upsertUser(env, message.from);

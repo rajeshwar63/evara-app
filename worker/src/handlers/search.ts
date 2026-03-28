@@ -1,7 +1,7 @@
 import { Env, InboundMessage } from "../types";
 import { upsertUser, searchDocuments } from "../supabase";
 import { getPublicUrl } from "../r2";
-import { sendTextReply, sendMediaReply } from "../aisensy";
+import { sendTextReply, sendMediaReply } from "../whatsapp";
 
 export async function handleSearch(env: Env, message: InboundMessage): Promise<void> {
   const user = await upsertUser(env, message.from);

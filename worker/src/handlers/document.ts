@@ -2,25 +2,18 @@ import { Env, InboundMessage } from "../types";
 import { upsertUser, insertDocument, updateStorageUsed } from "../supabase";
 import { uploadFile } from "../r2";
 import { tagDocument } from "../gemini";
-import { sendTextReply } from "../aisensy";
+import { sendTextReply, downloadWhatsAppMedia } from "../whatsapp";
 
 export async function handleDocument(env: Env, message: InboundMessage): Promise<void> {
   const user = await upsertUser(env, message.from);
 
-  if (!message.mediaUrl) {
+  if (!message.mediaId) {
     await sendTextReply(env, message.from, "I couldn't access that file. Please try sending it again.");
     return;
   }
 
-  // Download file
-  const mediaRes = await fetch(message.mediaUrl);
-  if (!mediaRes.ok) {
-    await sendTextReply(env, message.from, "Failed to download your file. Please try again.");
-    return;
-  }
-
-  const fileBytes = await mediaRes.arrayBuffer();
-  const mimeType = message.mimeType || mediaRes.headers.get("content-type") || "application/octet-stream";
+  // Download file from WhatsApp via Meta Cloud API
+  const { data: fileBytes, mimeType } = await downloadWhatsAppMedia(env, message.mediaId);
 
   // Upload to R2
   const { key, size } = await uploadFile(env, user.id, fileBytes, mimeType, message.fileName);

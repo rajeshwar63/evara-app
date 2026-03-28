@@ -1,12 +1,11 @@
-import { Env } from "./types";
-import { parseInboundMessage } from "./utils";
+import { Env, MetaWebhookBody, InboundMessage } from "./types";
 import { routeMessage } from "./router";
-import { sendTextReply } from "./aisensy";
+import { sendTextReply } from "./whatsapp";
 
 export type { Env };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // Health check
@@ -14,55 +13,37 @@ export default {
       return jsonResponse({ status: "ok", timestamp: new Date().toISOString() });
     }
 
-    // Webhook verification (GET) — some providers send a verification challenge
+    // Webhook verification (GET) — Meta sends this to verify the endpoint
     if (url.pathname === "/webhook" && request.method === "GET") {
+      const mode = url.searchParams.get("hub.mode");
+      const token = url.searchParams.get("hub.verify_token");
       const challenge = url.searchParams.get("hub.challenge");
-      if (challenge) return new Response(challenge, { status: 200 });
-      return jsonResponse({ status: "webhook active" });
+
+      if (mode === "subscribe" && token === env.WEBHOOK_VERIFY_TOKEN && challenge) {
+        return new Response(challenge, { status: 200 });
+      }
+
+      return new Response("Forbidden", { status: 403 });
     }
 
-    // Webhook handler (POST) — inbound WhatsApp messages
+    // Webhook handler (POST) — inbound WhatsApp messages from Meta
     if (url.pathname === "/webhook" && request.method === "POST") {
-      const startTime = Date.now();
-
-      let body: Record<string, unknown>;
+      let body: MetaWebhookBody;
       try {
-        body = (await request.json()) as Record<string, unknown>;
+        body = (await request.json()) as MetaWebhookBody;
       } catch {
         return jsonResponse({ error: "Invalid JSON" }, 400);
       }
 
-      const message = parseInboundMessage(body);
+      // Always return 200 immediately to Meta
+      // Process messages asynchronously via waitUntil
+      const messages = extractMessages(body);
 
-      if (!message.from) {
-        return jsonResponse({ error: "Missing sender" }, 400);
+      if (messages.length > 0) {
+        ctx.waitUntil(processMessages(env, messages));
       }
 
-      // Process asynchronously but respond immediately to avoid webhook timeout
-      const ctx = { waitUntil: (p: Promise<unknown>) => p };
-      // Use the execution context if available (Workers runtime provides it)
-      // For now, we await inline since we need error handling
-      try {
-        await routeMessage(env, message);
-        const elapsed = Date.now() - startTime;
-        console.log(`Processed ${message.type} from ${message.from} in ${elapsed}ms`);
-      } catch (err) {
-        const elapsed = Date.now() - startTime;
-        console.error(`Error processing message from ${message.from} after ${elapsed}ms:`, err);
-
-        // Always reply to the user even on failure
-        try {
-          await sendTextReply(
-            env,
-            message.from,
-            "Oops! Something went wrong processing your message. Please try again.",
-          );
-        } catch (replyErr) {
-          console.error("Failed to send error reply:", replyErr);
-        }
-      }
-
-      return jsonResponse({ status: "processed" });
+      return jsonResponse({ status: "ok" });
     }
 
     // Serve R2 files (for search result delivery)
@@ -84,6 +65,68 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
+
+/**
+ * Extract InboundMessage objects from the Meta webhook payload.
+ */
+function extractMessages(body: MetaWebhookBody): InboundMessage[] {
+  const messages: InboundMessage[] = [];
+
+  if (body.object !== "whatsapp_business_account") return messages;
+
+  for (const entry of body.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      const value = change.value;
+      if (!value.messages) continue;
+
+      for (const msg of value.messages) {
+        const type = msg.type === "image" ? "image"
+          : msg.type === "document" ? "document"
+          : "text";
+
+        messages.push({
+          messageId: msg.id,
+          from: msg.from,
+          type: type as "text" | "image" | "document",
+          text: msg.text?.body,
+          mediaId: msg.image?.id ?? msg.document?.id,
+          mimeType: msg.image?.mime_type ?? msg.document?.mime_type,
+          fileName: msg.document?.filename,
+          timestamp: msg.timestamp,
+        });
+      }
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Process extracted messages asynchronously.
+ */
+async function processMessages(env: Env, messages: InboundMessage[]): Promise<void> {
+  for (const message of messages) {
+    const startTime = Date.now();
+    try {
+      await routeMessage(env, message);
+      const elapsed = Date.now() - startTime;
+      console.log(`Processed ${message.type} from ${message.from} in ${elapsed}ms`);
+    } catch (err) {
+      const elapsed = Date.now() - startTime;
+      console.error(`Error processing message from ${message.from} after ${elapsed}ms:`, err);
+
+      try {
+        await sendTextReply(
+          env,
+          message.from,
+          "Oops! Something went wrong processing your message. Please try again.",
+        );
+      } catch (replyErr) {
+        console.error("Failed to send error reply:", replyErr);
+      }
+    }
+  }
+}
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
