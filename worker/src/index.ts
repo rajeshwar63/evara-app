@@ -107,13 +107,14 @@ function extractMessages(body: MetaWebhookBody): InboundMessage[] {
 async function processMessages(env: Env, messages: InboundMessage[]): Promise<void> {
   for (const message of messages) {
     const startTime = Date.now();
+    console.log(`[processMessages] START type=${message.type} from=${message.from} messageId=${message.messageId} text="${message.text ?? ""}" mediaId=${message.mediaId ?? "none"}`);
     try {
       await routeMessage(env, message);
       const elapsed = Date.now() - startTime;
-      console.log(`Processed ${message.type} from ${message.from} in ${elapsed}ms`);
+      console.log(`[processMessages] SUCCESS type=${message.type} from=${message.from} in ${elapsed}ms`);
     } catch (err) {
       const elapsed = Date.now() - startTime;
-      console.error(`Error processing message from ${message.from} after ${elapsed}ms:`, err);
+      console.error(`[processMessages] FAILED type=${message.type} from=${message.from} after ${elapsed}ms:`, err);
 
       try {
         await sendTextReply(
