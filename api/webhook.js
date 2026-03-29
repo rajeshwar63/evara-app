@@ -19,18 +19,15 @@ const MIME_TO_EXT = {
 };
 
 const CATEGORY_ICONS = {
-  bill: "📄 Bill",
-  receipt: "🧾 Receipt",
-  invoice: "🧾 Invoice",
-  insurance: "🛡️ Insurance",
+  identity: "🪪 Identity",
   medical: "🏥 Medical",
-  government_id: "🪪 Government ID",
-  certificate: "📜 Certificate",
-  bank_statement: "🏦 Bank Statement",
-  tax: "💰 Tax Document",
-  warranty: "🔧 Warranty",
-  ticket: "🎫 Ticket",
-  letter: "✉️ Letter",
+  financial: "💰 Financial",
+  education: "🎓 Education",
+  receipt: "🧾 Receipt",
+  legal: "⚖️ Legal",
+  insurance: "🛡️ Insurance",
+  travel: "✈️ Travel",
+  note: "📝 Note",
   other: "📎 Other",
 };
 
@@ -183,6 +180,25 @@ Just send me something to get started! 🚀`;
 // ═══════════════════════════════════════════════════════════════
 // MEDIA HANDLER
 // ═══════════════════════════════════════════════════════════════
+function mapCategory(cat) {
+  const valid = ["identity", "medical", "financial", "education", "receipt", "legal", "insurance", "travel", "note", "other"];
+  if (valid.includes(cat)) return cat;
+
+  // Map old/wrong categories to valid ones
+  const map = {
+    bill: "financial",
+    invoice: "financial",
+    bank_statement: "financial",
+    tax: "financial",
+    government_id: "identity",
+    certificate: "education",
+    warranty: "legal",
+    ticket: "travel",
+    letter: "other",
+  };
+  return map[cat] || "other";
+}
+
 async function handleMedia(from, media, type, messageId) {
   const startTime = Date.now();
 
@@ -202,7 +218,7 @@ async function handleMedia(from, media, type, messageId) {
       .insert({
         user_id: userId,
         wa_message_id: messageId,
-        category: ocr.category,
+        category: mapCategory(ocr.category),
         title: ocr.title,
         document_type: type === "image" ? "photo" : "pdf",
         extracted_text: ocr.text,
@@ -522,7 +538,7 @@ Extract ALL text from this document. Then classify it.
 Respond in this EXACT JSON format (no markdown, no code fences):
 {
   "text": "full extracted text here",
-  "category": "one of: bill, receipt, invoice, insurance, medical, government_id, certificate, bank_statement, tax, warranty, ticket, letter, other",
+  "category": "one of: identity, medical, financial, education, receipt, legal, insurance, travel, note, other",
   "title": "short descriptive title like 'Electricity Bill - March 2026' or 'Aadhaar Card'",
   "tags": ["tag1", "tag2", "tag3"],
   "amount": "total amount if visible e.g. '1584' or null",
