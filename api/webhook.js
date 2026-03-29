@@ -161,14 +161,17 @@ async function sendGreeting(from, senderName) {
   const name = senderName?.split(" ")[0] || "there";
   const welcome = `👋 Hi ${name}! I'm *Evara* — your document organizer on WhatsApp.
 
-📸 Send a *photo* or 📄 *PDF* — I'll scan, organize & save it
-🔍 *Search* — just type what you're looking for
-📝 *note:* your text — saves a quick note
-⏰ *Remind me...* — sets a reminder
-📂 *my docs* — manage & delete your files
-📊 *plan* — check usage & upgrade
+🔒 Your data is encrypted & only you can access it.
 
-Try it — send me a document now!`;
+📸 Send a *photo* or 📄 *PDF* — I'll scan & save it
+🔍 *Search* — type what you're looking for
+📝 *note:* your text — saves a note
+⏰ *Remind me...* — sets a reminder
+📂 *my docs* — manage your files
+📊 *plan* — check usage
+🔒 *privacy* — how your data is protected
+
+Send me a document to get started!`;
 
   await sendText(from, welcome);
 }
@@ -312,7 +315,27 @@ async function handleTextInput(from, text, messageId) {
     await sendDashboardLink(from, userId);
     return;
   }
-
+  
+const privacyPattern = /^(privacy|security|data|how is my data|trust|safe|secure)$/i;
+if (privacyPattern.test(lower)) {
+  await sendText(from,
+    `🔒 *How Evara Protects Your Data*\n\n` +
+    `📍 Your documents are stored on encrypted cloud servers — same infrastructure used by major companies.\n\n` +
+    `👤 Only YOU can access your documents. No one else — not even us — can see your files.\n\n` +
+    `🗑️ Delete anytime — type *my docs* to manage & delete.\n\n` +
+    `🚫 We NEVER share, sell, or use your data for ads.\n\n` +
+    `📋 *What we store:*\n` +
+    `• The photo/PDF you send (encrypted)\n` +
+    `• Extracted text (for search)\n` +
+    `• Your phone number (to identify you)\n\n` +
+    `📋 *What we DON'T do:*\n` +
+    `• No sharing with third parties\n` +
+    `• No training AI on your documents\n` +
+    `• No access to your WhatsApp chats\n\n` +
+    `🔗 Full policy: evara-app.com/privacy.html`
+  );
+  return;
+}
   // "note:" or "save:" prefix → save as note
   if (lower.startsWith("note:") || lower.startsWith("save:")) {
     const noteText = text.replace(/^(note|save)\s*:\s*/i, "").trim();
