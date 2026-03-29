@@ -1,7 +1,6 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createClient } from "@supabase/supabase-js";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { randomUUID } from "crypto";
+const { createClient } = require("@supabase/supabase-js");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { randomUUID } = require("crypto");
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
@@ -12,14 +11,14 @@ const GEMINI_URL =
 
 const GREETING_PATTERNS = /^(hi|hello|hey|help|start|menu|namaste|hola)$/i;
 
-const MIME_TO_EXT: Record<string, string> = {
+const MIME_TO_EXT = {
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
   "application/pdf": "pdf",
 };
 
-const CATEGORY_ICONS: Record<string, string> = {
+const CATEGORY_ICONS = {
   bill: "📄 Bill",
   receipt: "🧾 Receipt",
   invoice: "🧾 Invoice",
@@ -38,27 +37,27 @@ const CATEGORY_ICONS: Record<string, string> = {
 // ═══════════════════════════════════════════════════════════════
 // LAZY CLIENTS
 // ═══════════════════════════════════════════════════════════════
-let _supabase: any = null;
+let _supabase = null;
 function db() {
   if (!_supabase) {
     _supabase = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_KEY!,
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_KEY,
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
   }
   return _supabase;
 }
 
-let _s3: S3Client | null = null;
+let _s3 = null;
 function r2() {
   if (!_s3) {
     _s3 = new S3Client({
       region: "auto",
-      endpoint: process.env.R2_ENDPOINT!,
+      endpoint: process.env.R2_ENDPOINT,
       credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY!,
-        secretAccessKey: process.env.R2_SECRET_KEY!,
+        accessKeyId: process.env.R2_ACCESS_KEY,
+        secretAccessKey: process.env.R2_SECRET_KEY,
       },
     });
   }
@@ -68,7 +67,7 @@ function r2() {
 // ═══════════════════════════════════════════════════════════════
 // ENTRY POINT
 // ═══════════════════════════════════════════════════════════════
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+module.exports = async function handler(req, res) {
   // GET: Meta webhook verification
   if (req.method === "GET") {
     const mode = req.query["hub.mode"];
@@ -91,9 +90,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!value?.messages?.length) return;
 
       const message = value.messages[0];
-      const from: string = message.from;
-      const senderName: string =
-        value.contacts?.[0]?.profile?.name || "User";
+      const from = message.from;
+      const senderName = value.contacts?.[0]?.profile?.name || "User";
 
       console.log(`[webhook] ${from} (${senderName}): type=${message.type}`);
       await routeMessage(message, from, senderName);
@@ -104,14 +102,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   return res.status(405).send("Method Not Allowed");
-}
+};
 
 // ═══════════════════════════════════════════════════════════════
 // MESSAGE ROUTER
 // ═══════════════════════════════════════════════════════════════
-async function routeMessage(message: any, from: string, senderName: string) {
+async function routeMessage(message, from, senderName) {
   try {
-    // Log inbound
     await db()
       .from("messages_log")
       .insert({
@@ -174,7 +171,7 @@ async function routeMessage(message: any, from: string, senderName: string) {
 // ═══════════════════════════════════════════════════════════════
 // GREETING HANDLER
 // ═══════════════════════════════════════════════════════════════
-async function sendGreeting(from: string, senderName: string) {
+async function sendGreeting(from, senderName) {
   const name = senderName?.split(" ")[0] || "there";
   const welcome = `👋 Hi ${name}! Welcome to *Evara* — your personal document organizer on WhatsApp.
 
@@ -198,29 +195,18 @@ Just send me something to get started! 🚀`;
 // ═══════════════════════════════════════════════════════════════
 // MEDIA HANDLER (Image / PDF)
 // ═══════════════════════════════════════════════════════════════
-async function handleMedia(
-  from: string,
-  media: any,
-  type: "image" | "document",
-  messageId: string
-) {
+async function handleMedia(from, media, type, messageId) {
   const startTime = Date.now();
 
   try {
     const userId = await getOrCreateUser(from);
-
-    // Download from Meta
     const { buffer, mimeType } = await downloadMedia(media.id);
-
-    // Upload to R2
     const { key, url } = await uploadToR2(buffer, mimeType, from);
 
-    // OCR via Gemini
     const base64 = buffer.toString("base64");
     const ocr = await ocrDocument(base64, mimeType);
 
-    // Store in Supabase
-    const doc = await storeDocument({
+    await storeDocument({
       user_id: userId,
       doc_type: type === "image" ? "photo" : "pdf",
       file_key: key,
@@ -239,7 +225,7 @@ async function handleMedia(
 
     const sizeKB = Math.round(buffer.length / 1024);
     const tagStr =
-      ocr.tags.length > 0 ? ocr.tags.map((t: string) => `#${t}`).join(" ") : "";
+      ocr.tags.length > 0 ? ocr.tags.map((t) => `#${t}`).join(" ") : "";
 
     let reply = `✅ *Document saved!*\n\n`;
     reply += `📋 *${ocr.title}*\n`;
@@ -272,7 +258,7 @@ async function handleMedia(
 // ═══════════════════════════════════════════════════════════════
 // TEXT INPUT HANDLER
 // ═══════════════════════════════════════════════════════════════
-async function handleTextInput(from: string, text: string, messageId: string) {
+async function handleTextInput(from, text, messageId) {
   const userId = await getOrCreateUser(from);
   const intent = await classifyTextIntent(text);
 
@@ -290,12 +276,7 @@ async function handleTextInput(from: string, text: string, messageId: string) {
   }
 }
 
-async function handleReminder(
-  from: string,
-  userId: string,
-  rawText: string,
-  intent: any
-) {
+async function handleReminder(from, userId, rawText, intent) {
   try {
     if (!intent.reminder_datetime) {
       await sendText(
@@ -341,12 +322,7 @@ async function handleReminder(
   }
 }
 
-async function handleNote(
-  from: string,
-  userId: string,
-  text: string,
-  title?: string
-) {
+async function handleNote(from, userId, text, title) {
   try {
     const cleanText = text.replace(/^note\s*:\s*/i, "").trim();
 
@@ -374,7 +350,7 @@ async function handleNote(
   }
 }
 
-async function handleSearch(from: string, userId: string, query: string) {
+async function handleSearch(from, userId, query) {
   try {
     const words = query
       .split(/\s+/)
@@ -398,7 +374,6 @@ async function handleSearch(from: string, userId: string, query: string) {
 
     if (error) throw error;
 
-    // Log search
     await db()
       .from("search_log")
       .insert({ user_id: userId, query, result_count: results?.length || 0 });
@@ -413,7 +388,7 @@ async function handleSearch(from: string, userId: string, query: string) {
 
     let reply = `🔍 Found *${results.length}* result${results.length > 1 ? "s" : ""} for *"${query}"*:\n\n`;
 
-    results.forEach((doc: any, i: number) => {
+    results.forEach((doc, i) => {
       const date = new Date(doc.created_at).toLocaleDateString("en-IN", {
         day: "numeric",
         month: "short",
@@ -453,7 +428,7 @@ async function handleSearch(from: string, userId: string, query: string) {
 // ═══════════════════════════════════════════════════════════════
 // WHATSAPP API HELPERS
 // ═══════════════════════════════════════════════════════════════
-async function sendText(to: string, body: string) {
+async function sendText(to, body) {
   const url = `${GRAPH_API}/${process.env.META_PHONE_NUMBER_ID}/messages`;
   const res = await fetch(url, {
     method: "POST",
@@ -473,7 +448,7 @@ async function sendText(to: string, body: string) {
   }
 }
 
-async function sendReaction(to: string, messageId: string, emoji: string) {
+async function sendReaction(to, messageId, emoji) {
   const url = `${GRAPH_API}/${process.env.META_PHONE_NUMBER_ID}/messages`;
   await fetch(url, {
     method: "POST",
@@ -490,15 +465,13 @@ async function sendReaction(to: string, messageId: string, emoji: string) {
   }).catch(() => {});
 }
 
-async function downloadMedia(
-  mediaId: string
-): Promise<{ buffer: Buffer; mimeType: string }> {
+async function downloadMedia(mediaId) {
   const metaRes = await fetch(`${GRAPH_API}/${mediaId}`, {
     headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
   });
   if (!metaRes.ok) throw new Error(`Media URL failed: ${metaRes.status}`);
 
-  const meta = (await metaRes.json()) as { url: string; mime_type: string };
+  const meta = await metaRes.json();
 
   const dlRes = await fetch(meta.url, {
     headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
@@ -512,11 +485,7 @@ async function downloadMedia(
 // ═══════════════════════════════════════════════════════════════
 // R2 STORAGE
 // ═══════════════════════════════════════════════════════════════
-async function uploadToR2(
-  buffer: Buffer,
-  mimeType: string,
-  phone: string
-): Promise<{ key: string; url: string }> {
+async function uploadToR2(buffer, mimeType, phone) {
   const ext = MIME_TO_EXT[mimeType] || "bin";
   const date = new Date().toISOString().slice(0, 10);
   const uuid = randomUUID().slice(0, 8);
@@ -540,7 +509,7 @@ async function uploadToR2(
 // ═══════════════════════════════════════════════════════════════
 // SUPABASE HELPERS
 // ═══════════════════════════════════════════════════════════════
-async function getOrCreateUser(phone: string): Promise<string> {
+async function getOrCreateUser(phone) {
   const { data: existing } = await db()
     .from("users")
     .select("id")
@@ -564,7 +533,7 @@ async function getOrCreateUser(phone: string): Promise<string> {
   return newUser.id;
 }
 
-async function storeDocument(doc: any) {
+async function storeDocument(doc) {
   const { data, error } = await db()
     .from("documents")
     .insert(doc)
@@ -578,7 +547,7 @@ async function storeDocument(doc: any) {
 // ═══════════════════════════════════════════════════════════════
 // GEMINI API
 // ═══════════════════════════════════════════════════════════════
-async function callGemini(parts: any[]): Promise<string> {
+async function callGemini(parts) {
   const res = await fetch(
     `${GEMINI_URL}?key=${process.env.GEMINI_API_KEY}`,
     {
@@ -596,14 +565,11 @@ async function callGemini(parts: any[]): Promise<string> {
     throw new Error(`Gemini failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as any;
+  const data = await res.json();
   return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 }
 
-async function ocrDocument(
-  base64Data: string,
-  mimeType: string
-): Promise<{ text: string; category: string; title: string; tags: string[] }> {
+async function ocrDocument(base64Data, mimeType) {
   const prompt = `You are a document OCR and classification assistant for Indian users.
 
 Extract ALL text from this document. Then classify it.
@@ -637,12 +603,12 @@ Rules:
       title: parsed.title || "Untitled Document",
       tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     };
-  } catch {
+  } catch (e) {
     return { text: raw, category: "other", title: "Untitled Document", tags: [] };
   }
 }
 
-async function classifyTextIntent(text: string): Promise<any> {
+async function classifyTextIntent(text) {
   const now = new Date().toISOString();
 
   const prompt = `You are a WhatsApp assistant for Indian users. Classify this message intent.
@@ -678,7 +644,7 @@ Rules:
   try {
     const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
     return JSON.parse(cleaned);
-  } catch {
+  } catch (e) {
     return { intent: "search" };
   }
 }
