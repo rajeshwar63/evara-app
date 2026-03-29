@@ -1,8 +1,7 @@
 {
   "functions": {
     "api/webhook.ts": {
-      "maxDuration": 60,
-      "runtime": "@vercel/node@5.0.0"
+      "maxDuration": 60
     }
   }
 }
