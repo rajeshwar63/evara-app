@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Documents — Evara</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green: #25D366;
+      --green-dark: #128C7E;
+      --green-light: #DCF8C6;
+      --ink: #1a1a2e;
+      --ink-light: #4a4a5a;
+      --cream: #faf9f6;
+      --warm: #f5f0e8;
+      --accent: #FF6B35;
+      --card-bg: #ffffff;
+      --radius: 16px;
+      --shadow: 0 4px 30px rgba(0,0,0,0.06);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      color: var(--ink);
+      background: var(--cream);
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+
+    /* ─── Header ─── */
+    .header {
+      background: rgba(250,249,246,0.92);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+      padding: 16px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .logo {
+      font-family: 'DM Serif Display', serif;
+      font-size: 1.5rem;
+      color: var(--green-dark);
+      text-decoration: none;
+      letter-spacing: -0.5px;
+    }
+    .logo span { color: var(--accent); }
+    .header-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--ink-light);
+      border-left: 2px solid var(--warm);
+      padding-left: 16px;
+    }
+
+    /* ─── Container ─── */
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 16px 80px;
+    }
+
+    /* ─── Stats Bar ─── */
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      padding: 18px 16px;
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+    .stat-value {
+      font-family: 'DM Serif Display', serif;
+      font-size: 1.6rem;
+      color: var(--green-dark);
+    }
+    .stat-label {
+      font-size: 0.78rem;
+      color: var(--ink-light);
+      margin-top: 2px;
+      font-weight: 500;
+    }
+
+    /* ─── Document Grid ─── */
+    .doc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .doc-card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
+      animation: fadeIn 0.3s ease;
+    }
+    .doc-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.1);
+    }
+    .doc-card.removing {
+      animation: slideOut 0.3s ease forwards;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideOut {
+      to { opacity: 0; transform: scale(0.95) translateY(8px); }
+    }
+
+    /* Thumbnail */
+    .doc-thumb {
+      width: 100%;
+      height: 180px;
+      background: var(--warm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+    .doc-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .doc-thumb-icon {
+      font-size: 2.8rem;
+      opacity: 0.5;
+    }
+    .doc-thumb-text {
+      padding: 16px;
+      font-size: 0.82rem;
+      color: var(--ink-light);
+      line-height: 1.5;
+      text-align: center;
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* Card body */
+    .doc-body {
+      padding: 14px 16px 16px;
+    }
+    .doc-title {
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .doc-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .doc-badge {
+      background: var(--green-light);
+      color: var(--green-dark);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 50px;
+      text-transform: capitalize;
+    }
+    .doc-date, .doc-size {
+      font-size: 0.78rem;
+      color: var(--ink-light);
+    }
+    .doc-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .btn-delete {
+      background: none;
+      border: 1.5px solid #e74c3c;
+      color: #e74c3c;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .btn-delete:hover {
+      background: #e74c3c;
+      color: white;
+    }
+
+    /* ─── States ─── */
+    .state-container {
+      text-align: center;
+      padding: 80px 24px;
+    }
+    .state-icon {
+      font-size: 3.5rem;
+      margin-bottom: 16px;
+    }
+    .state-title {
+      font-family: 'DM Serif Display', serif;
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+    }
+    .state-text {
+      color: var(--ink-light);
+      font-size: 0.95rem;
+      max-width: 360px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    /* Skeleton loading */
+    .skeleton-card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .skeleton-thumb {
+      width: 100%;
+      height: 180px;
+      background: linear-gradient(90deg, var(--warm) 25%, #ede9e0 50%, var(--warm) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+    .skeleton-body { padding: 14px 16px 16px; }
+    .skeleton-line {
+      height: 14px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--warm) 25%, #ede9e0 50%, var(--warm) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      margin-bottom: 10px;
+    }
+    .skeleton-line.short { width: 60%; }
+
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+
+    /* ─── Confirm Dialog ─── */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      animation: fadeIn 0.2s ease;
+    }
+    .dialog {
+      background: white;
+      border-radius: var(--radius);
+      padding: 28px 24px;
+      max-width: 360px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+    }
+    .dialog h3 {
+      font-family: 'DM Serif Display', serif;
+      font-size: 1.2rem;
+      margin-bottom: 8px;
+    }
+    .dialog p {
+      color: var(--ink-light);
+      font-size: 0.9rem;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .dialog-buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+    .btn-cancel {
+      background: var(--warm);
+      border: none;
+      padding: 10px 24px;
+      border-radius: 50px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+    .btn-cancel:hover { background: #e8e3d8; }
+    .btn-confirm-delete {
+      background: #e74c3c;
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 50px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+    }
+    .btn-confirm-delete:hover { background: #c0392b; }
+
+    /* ─── Toast ─── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--ink);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 50px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+      z-index: 300;
+      transition: transform 0.3s ease;
+      pointer-events: none;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 600px) {
+      .container { padding: 16px 12px 60px; }
+      .stats-bar { gap: 8px; }
+      .stat-card { padding: 14px 10px; }
+      .stat-value { font-size: 1.3rem; }
+      .doc-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+      .doc-thumb { height: 130px; }
+      .doc-body { padding: 10px 12px 14px; }
+      .doc-title { font-size: 0.85rem; }
+      .header { padding: 12px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <a href="/" class="logo">evar<span>a</span></a>
+    <div class="header-title">My Documents</div>
+  </div>
+
+  <div class="container">
+    <div id="stats-bar" class="stats-bar" style="display:none;"></div>
+    <div id="content"></div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const API_BASE = '/api/docs';
+    const token = new URLSearchParams(window.location.search).get('token');
+    let documents = [];
+
+    // ─── Category icons ───
+    const CATEGORY_ICONS = {
+      identity: '🪪', medical: '🏥', financial: '💰', education: '🎓',
+      receipt: '🧾', legal: '⚖️', insurance: '🛡️', travel: '✈️',
+      note: '📝', other: '📄'
+    };
+
+    // ─── Init ───
+    (async function init() {
+      const content = document.getElementById('content');
+
+      if (!token) {
+        showError();
+        return;
+      }
+
+      showLoading();
+      try {
+        const res = await fetch(API_BASE, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Unauthorized');
+        const data = await res.json();
+        documents = data.documents || [];
+        render();
+      } catch (e) {
+        showError();
+      }
+    })();
+
+    // ─── Render ───
+    function render() {
+      const content = document.getElementById('content');
+      const statsBar = document.getElementById('stats-bar');
+
+      if (documents.length === 0) {
+        statsBar.style.display = 'none';
+        content.innerHTML = `
+          <div class="state-container">
+            <div class="state-icon">📭</div>
+            <div class="state-title">No documents yet</div>
+            <div class="state-text">Send a photo or PDF on WhatsApp to get started!</div>
+          </div>`;
+        return;
+      }
+
+      // Stats
+      const totalDocs = documents.length;
+      const totalBytes = documents.reduce((s, d) => s + (d.file_size_bytes || 0), 0);
+      const now = new Date();
+      const thisMonth = documents.filter(d => {
+        const dt = new Date(d.created_at);
+        return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
+      }).length;
+
+      statsBar.style.display = 'grid';
+      statsBar.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-value">${totalDocs}</div>
+          <div class="stat-label">Total Documents</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatSize(totalBytes)}</div>
+          <div class="stat-label">Storage Used</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${thisMonth}</div>
+          <div class="stat-label">This Month</div>
+        </div>`;
+
+      // Document grid
+      content.innerHTML = `<div class="doc-grid">${documents.map(docCard).join('')}</div>`;
+    }
+
+    // ─── Document Card ───
+    function docCard(doc) {
+      const icon = CATEGORY_ICONS[doc.category] || '📄';
+      const date = formatDate(doc.created_at);
+      const size = doc.file_size_bytes ? formatSize(doc.file_size_bytes) : '';
+
+      let thumb = '';
+      if (doc.document_type === 'photo' && doc.preview_url) {
+        thumb = `<img src="${escapeHtml(doc.preview_url)}" alt="${escapeHtml(doc.title)}" loading="lazy">`;
+      } else if (doc.document_type === 'pdf') {
+        thumb = `<div class="doc-thumb-icon">📑</div>`;
+      } else if (doc.document_type === 'text_note') {
+        const preview = doc.extracted_text ? doc.extracted_text.substring(0, 50) + (doc.extracted_text.length > 50 ? '...' : '') : '';
+        thumb = `<div class="doc-thumb-icon">📝</div>${preview ? `<div class="doc-thumb-text">${escapeHtml(preview)}</div>` : ''}`;
+      } else if (doc.document_type === 'link') {
+        thumb = `<div class="doc-thumb-icon">🔗</div>`;
+      } else {
+        thumb = `<div class="doc-thumb-icon">📄</div>`;
+      }
+
+      return `
+        <div class="doc-card" id="doc-${doc.id}">
+          <div class="doc-thumb">${thumb}</div>
+          <div class="doc-body">
+            <div class="doc-title" title="${escapeHtml(doc.title || 'Untitled')}">${escapeHtml(doc.title || 'Untitled')}</div>
+            <div class="doc-meta">
+              <span class="doc-badge">${icon} ${escapeHtml(doc.category || 'other')}</span>
+              <span class="doc-date">${date}</span>
+              ${size ? `<span class="doc-size">${size}</span>` : ''}
+            </div>
+            <div class="doc-actions">
+              <button class="btn-delete" onclick="confirmDelete('${doc.id}', '${escapeHtml(doc.title || 'Untitled')}')">Delete</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ─── Delete flow ───
+    function confirmDelete(docId, title) {
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay';
+      overlay.innerHTML = `
+        <div class="dialog">
+          <h3>Delete Document?</h3>
+          <p>Are you sure you want to delete "${title}"? This cannot be undone.</p>
+          <div class="dialog-buttons">
+            <button class="btn-cancel" onclick="this.closest('.overlay').remove()">Cancel</button>
+            <button class="btn-confirm-delete" onclick="doDelete('${docId}', this)">Delete</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    }
+
+    async function doDelete(docId, btn) {
+      btn.textContent = 'Deleting...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}?id=${docId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Failed');
+
+        // Remove overlay
+        document.querySelector('.overlay')?.remove();
+
+        // Animate removal
+        const card = document.getElementById(`doc-${docId}`);
+        if (card) {
+          card.classList.add('removing');
+          card.addEventListener('animationend', () => card.remove());
+        }
+
+        // Update data
+        documents = documents.filter(d => d.id !== docId);
+        showToast('Document deleted');
+
+        // Re-render stats (and empty state if needed)
+        if (documents.length === 0) {
+          render();
+        } else {
+          // Update stats only
+          const statsBar = document.getElementById('stats-bar');
+          const totalDocs = documents.length;
+          const totalBytes = documents.reduce((s, d) => s + (d.file_size_bytes || 0), 0);
+          const now = new Date();
+          const thisMonth = documents.filter(d => {
+            const dt = new Date(d.created_at);
+            return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
+          }).length;
+          statsBar.innerHTML = `
+            <div class="stat-card">
+              <div class="stat-value">${totalDocs}</div>
+              <div class="stat-label">Total Documents</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${formatSize(totalBytes)}</div>
+              <div class="stat-label">Storage Used</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${thisMonth}</div>
+              <div class="stat-label">This Month</div>
+            </div>`;
+        }
+      } catch (e) {
+        document.querySelector('.overlay')?.remove();
+        showToast('Failed to delete. Please try again.');
+      }
+    }
+
+    // ─── Loading state ───
+    function showLoading() {
+      const content = document.getElementById('content');
+      const skeletons = Array(6).fill(`
+        <div class="skeleton-card">
+          <div class="skeleton-thumb"></div>
+          <div class="skeleton-body">
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line short"></div>
+          </div>
+        </div>`).join('');
+      content.innerHTML = `<div class="doc-grid">${skeletons}</div>`;
+    }
+
+    // ─── Error state ───
+    function showError() {
+      const content = document.getElementById('content');
+      document.getElementById('stats-bar').style.display = 'none';
+      content.innerHTML = `
+        <div class="state-container">
+          <div class="state-icon">🔒</div>
+          <div class="state-title">Link expired or invalid</div>
+          <div class="state-text">Send <strong>"my docs"</strong> on WhatsApp to get a new link.</div>
+        </div>`;
+    }
+
+    // ─── Toast ───
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    // ─── Helpers ───
+    function formatDate(iso) {
+      const d = new Date(iso);
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>
