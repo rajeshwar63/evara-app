@@ -304,7 +304,7 @@ async function handleReminder(from, userId, rawText, intent) {
       .insert({
         user_id: userId,
         remind_at: intent.reminder_datetime,
-        reminder_type: "user_set",
+        reminder_type: "custom",
         message: intent.reminder_title || rawText.substring(0, 100),
         original_text: rawText,
         sent: false,
