@@ -1,5 +1,6 @@
 const { createClient } = require("@supabase/supabase-js");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { randomUUID } = require("crypto");
 
 // ═══════════════════════════════════════════════════════════════
@@ -368,7 +369,7 @@ async function handleSearch(from, userId, query) {
 
     const { data: results, error } = await db()
       .from("documents")
-      .select("id, document_type, category, title, extracted_text, created_at")
+      .select("id, document_type, category, title, extracted_text, created_at, file_key, file_type")
       .eq("user_id", userId)
       .or(orConditions)
       .order("created_at", { ascending: false })
@@ -388,7 +389,8 @@ async function handleSearch(from, userId, query) {
 
     let reply = `🔍 Found *${results.length}* result${results.length > 1 ? "s" : ""} for *"${query}"*:\n\n`;
 
-    results.forEach((doc, i) => {
+    for (let i = 0; i < results.length; i++) {
+      const doc = results[i];
       const date = new Date(doc.created_at).toLocaleDateString("en-IN", {
         day: "numeric", month: "short", year: "numeric",
       });
@@ -396,16 +398,26 @@ async function handleSearch(from, userId, query) {
         : doc.document_type === "pdf" ? "📄"
         : doc.document_type === "text_note" ? "📝" : "📎";
       const title = doc.title || "Untitled";
-      const preview = doc.extracted_text
-        ? doc.extracted_text.substring(0, 100).replace(/\n/g, " ") : "";
 
       reply += `${i + 1}. ${icon} *${title}*\n`;
-      reply += `   📁 ${doc.category || doc.document_type} · ${date}\n`;
-      if (preview) reply += `   _${preview}${doc.extracted_text?.length > 100 ? "..." : ""}_\n`;
-      reply += `\n`;
-    });
+      reply += `   📁 ${doc.category || doc.document_type} · ${date}\n\n`;
+    }
 
     await sendText(from, reply.trim());
+
+    // Send actual files back in chat (max 3 to avoid spam)
+    const fileDocs = results.filter((d) => d.file_key).slice(0, 3);
+    for (const doc of fileDocs) {
+      try {
+        const fileUrl = await getFileUrl(doc.file_key);
+        if (fileUrl) {
+          await sendMediaMessage(from, fileUrl, doc.file_type, doc.title || "Document");
+        }
+      } catch (err) {
+        console.error("[search] Failed to send file:", err);
+      }
+    }
+    return;
   } catch (err) {
     console.error("[search] Failed:", err);
     await sendText(from, "😓 Search failed. Please try again with different keywords.");
@@ -415,6 +427,38 @@ async function handleSearch(from, userId, query) {
 // ═══════════════════════════════════════════════════════════════
 // WHATSAPP API
 // ═══════════════════════════════════════════════════════════════
+async function getFileUrl(fileKey) {
+  if (!fileKey) return null;
+  const bucket = process.env.R2_BUCKET || "evara-documents";
+  const command = new GetObjectCommand({ Bucket: bucket, Key: fileKey });
+  return await getSignedUrl(r2(), command, { expiresIn: 3600 });
+}
+
+async function sendMediaMessage(to, mediaUrl, mimeType, caption) {
+  const url = `${GRAPH_API}/${process.env.META_PHONE_NUMBER_ID}/messages`;
+  const isImage = mimeType && mimeType.startsWith("image/");
+  const type = isImage ? "image" : "document";
+
+  const mediaObj = { link: mediaUrl };
+  if (caption) mediaObj.caption = caption;
+  if (!isImage) mediaObj.filename = caption || "document.pdf";
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type,
+      [type]: mediaObj,
+    }),
+  });
+  if (!res.ok) console.error(`[wa] sendMedia failed ${res.status}:`, await res.text());
+}
+
 async function sendText(to, body) {
   const url = `${GRAPH_API}/${process.env.META_PHONE_NUMBER_ID}/messages`;
   const res = await fetch(url, {
