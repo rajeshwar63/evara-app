@@ -208,8 +208,19 @@ async function handleMedia(from, media, type, messageId) {
     const { buffer, mimeType } = await downloadMedia(media.id);
     const { key, url } = await uploadToR2(buffer, mimeType, from);
 
-    const base64 = buffer.toString("base64");
-    const ocr = await ocrDocument(base64, mimeType);
+    let ocrData;
+    if (mimeType === "application/pdf") {
+      // For PDFs: only send first page worth of data (max 500KB) + filename
+      const maxBytes = 500 * 1024;
+      const trimmedBuffer = buffer.length > maxBytes ? buffer.slice(0, maxBytes) : buffer;
+      const base64 = trimmedBuffer.toString("base64");
+      const filename = media.filename || "document.pdf";
+      ocrData = await ocrDocument(base64, mimeType, filename);
+    } else {
+      const base64 = buffer.toString("base64");
+      ocrData = await ocrDocument(base64, mimeType);
+    }
+    const ocr = ocrData;
 
     // documents columns: user_id, wa_message_id, category, title, document_type,
     // extracted_text, amount, organization, language_detected, tags,
@@ -574,8 +585,10 @@ async function callGemini(parts) {
   return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
 }
 
-async function ocrDocument(base64Data, mimeType) {
+async function ocrDocument(base64Data, mimeType, filename) {
   const prompt = `You are a document OCR and classification assistant for Indian users.
+${filename ? `\nFilename: ${filename}` : ""}
+NOTE: For PDFs, you may only see the first page. Extract what you can and classify based on that.
 
 Extract ALL text from this document. Then classify it.
 
