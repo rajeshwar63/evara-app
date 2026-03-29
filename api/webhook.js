@@ -318,7 +318,7 @@ async function handleNote(from, userId, text, title) {
         title: title || cleanText.substring(0, 50),
         document_type: "text_note",
         extracted_text: cleanText,
-        message_type: "text",
+        message_type: "text_note",
         file_size_bytes: Buffer.byteLength(cleanText, "utf-8"),
       });
 
