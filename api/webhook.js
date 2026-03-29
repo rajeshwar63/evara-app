@@ -238,7 +238,7 @@ async function handleMedia(from, media, type, messageId) {
         organization: ocr.organization || null,
         language_detected: ocr.language || null,
         tags: ocr.tags,
-        message_type: type,
+        message_type: type === "document" ? "pdf" : type,
         file_url: url,
         file_key: key,
         file_type: mimeType,
