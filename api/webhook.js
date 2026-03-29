@@ -590,6 +590,7 @@ async function sendPlanInfo(from, userId) {
     msg += `✓ 1 GB storage\n`;
     msg += `✓ Unlimited reminders\n`;
     msg += `✓ Priority support\n\n`;
+    msg += `💳 Pay securely: https://rzp.io/rzp/a1F4Ljhw\n\n`;
     msg += `📩 To upgrade, contact: wa.me/919398574255`;
   }
 
