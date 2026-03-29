@@ -68,7 +68,6 @@ function r2() {
 // ENTRY POINT
 // ═══════════════════════════════════════════════════════════════
 module.exports = async function handler(req, res) {
-  // GET: Meta webhook verification
   if (req.method === "GET") {
     const mode = req.query["hub.mode"];
     const token = req.query["hub.verify_token"];
@@ -81,7 +80,6 @@ module.exports = async function handler(req, res) {
     return res.status(403).send("Forbidden");
   }
 
-  // POST: Incoming messages
   if (req.method === "POST") {
     try {
       const value = req.body?.entry?.[0]?.changes?.[0]?.value;
@@ -109,14 +107,15 @@ module.exports = async function handler(req, res) {
 // ═══════════════════════════════════════════════════════════════
 async function routeMessage(message, from, senderName) {
   try {
+    // Log inbound — columns: wa_message_id, direction, message_type, content_preview, processed
     await db()
       .from("messages_log")
       .insert({
-        phone: from,
+        wa_message_id: message.id,
         direction: "inbound",
         message_type: message.type,
-        message_id: message.id,
-        payload: message,
+        content_preview: message.text?.body?.substring(0, 100) || message.type,
+        processed: false,
       });
 
     switch (message.type) {
@@ -138,17 +137,9 @@ async function routeMessage(message, from, senderName) {
 
       case "document": {
         const mime = message.document?.mime_type || "";
-        const supported = [
-          "application/pdf",
-          "image/jpeg",
-          "image/png",
-          "image/webp",
-        ];
+        const supported = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
         if (!supported.includes(mime)) {
-          await sendText(
-            from,
-            `⚠️ Sorry, I can't process *${mime}* files yet.\n\nI support: 📸 Photos, 📄 PDFs, 📝 Text notes, ⏰ Reminders`
-          );
+          await sendText(from, `⚠️ Sorry, I can't process *${mime}* files yet.\n\nI support: 📸 Photos, 📄 PDFs, 📝 Text notes, ⏰ Reminders`);
           break;
         }
         await sendReaction(from, message.id, "⏳");
@@ -157,10 +148,7 @@ async function routeMessage(message, from, senderName) {
       }
 
       default:
-        await sendText(
-          from,
-          `I received your ${message.type}, but I can only process text, images, and PDFs right now. Send *hi* for help!`
-        );
+        await sendText(from, `I received your ${message.type}, but I can only process text, images, and PDFs right now. Send *hi* for help!`);
     }
   } catch (err) {
     console.error(`[router] Error for ${from}:`, err);
@@ -169,7 +157,7 @@ async function routeMessage(message, from, senderName) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GREETING HANDLER
+// GREETING
 // ═══════════════════════════════════════════════════════════════
 async function sendGreeting(from, senderName) {
   const name = senderName?.split(" ")[0] || "there";
@@ -193,7 +181,7 @@ Just send me something to get started! 🚀`;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MEDIA HANDLER (Image / PDF)
+// MEDIA HANDLER
 // ═══════════════════════════════════════════════════════════════
 async function handleMedia(from, media, type, messageId) {
   const startTime = Date.now();
@@ -206,26 +194,36 @@ async function handleMedia(from, media, type, messageId) {
     const base64 = buffer.toString("base64");
     const ocr = await ocrDocument(base64, mimeType);
 
-    await storeDocument({
-      user_id: userId,
-      doc_type: type === "image" ? "photo" : "pdf",
-      file_key: key,
-      file_url: url,
-      mime_type: mimeType,
-      file_size: buffer.length,
-      ocr_text: ocr.text,
-      category: ocr.category,
-      title: ocr.title,
-      tags: ocr.tags,
-      source_message_id: messageId,
-    });
+    // documents columns: user_id, wa_message_id, category, title, document_type,
+    // extracted_text, amount, organization, language_detected, tags,
+    // message_type, file_url, file_key, file_type, file_size_bytes
+    const { error } = await db()
+      .from("documents")
+      .insert({
+        user_id: userId,
+        wa_message_id: messageId,
+        category: ocr.category,
+        title: ocr.title,
+        document_type: type === "image" ? "photo" : "pdf",
+        extracted_text: ocr.text,
+        amount: ocr.amount || null,
+        organization: ocr.organization || null,
+        language_detected: ocr.language || null,
+        tags: ocr.tags,
+        message_type: type,
+        file_url: url,
+        file_key: key,
+        file_type: mimeType,
+        file_size_bytes: buffer.length,
+      });
+
+    if (error) throw error;
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     await sendReaction(from, messageId, "✅");
 
     const sizeKB = Math.round(buffer.length / 1024);
-    const tagStr =
-      ocr.tags.length > 0 ? ocr.tags.map((t) => `#${t}`).join(" ") : "";
+    const tagStr = ocr.tags.length > 0 ? ocr.tags.map((t) => `#${t}`).join(" ") : "";
 
     let reply = `✅ *Document saved!*\n\n`;
     reply += `📋 *${ocr.title}*\n`;
@@ -236,22 +234,15 @@ async function handleMedia(from, media, type, messageId) {
       const preview = ocr.text.substring(0, 200).replace(/\n/g, " ");
       reply += `\n📖 Preview:\n_${preview}${ocr.text.length > 200 ? "..." : ""}_\n`;
     }
-
     if (tagStr) reply += `\n🏷️ ${tagStr}`;
     reply += `\n\n⏱️ Processed in ${elapsed}s`;
-
-    if (media.caption) {
-      reply += `\n📎 Your note: _${media.caption}_`;
-    }
+    if (media.caption) reply += `\n📎 Your note: _${media.caption}_`;
 
     await sendText(from, reply);
   } catch (err) {
     console.error(`[media] Failed for ${from}:`, err);
     await sendReaction(from, messageId, "❌");
-    await sendText(
-      from,
-      "❌ Sorry, I couldn't process that file. Please try again."
-    );
+    await sendText(from, "❌ Sorry, I couldn't process that file. Please try again.");
   }
 }
 
@@ -279,43 +270,35 @@ async function handleTextInput(from, text, messageId) {
 async function handleReminder(from, userId, rawText, intent) {
   try {
     if (!intent.reminder_datetime) {
-      await sendText(
-        from,
-        "⏰ I understood you want a reminder, but couldn't figure out the date/time. Try:\n\n_Remind me to pay rent on April 5 at 10am_\n_Kal subah 8 baje gym yaad dilao_"
-      );
+      await sendText(from, "⏰ I understood you want a reminder, but couldn't figure out the date/time. Try:\n\n_Remind me to pay rent on April 5 at 10am_\n_Kal subah 8 baje gym yaad dilao_");
       return;
     }
 
+    // reminders columns: user_id, remind_at, reminder_type, message, original_text, sent
     const { data: reminder, error } = await db()
       .from("reminders")
       .insert({
         user_id: userId,
-        title: intent.reminder_title || rawText.substring(0, 100),
         remind_at: intent.reminder_datetime,
-        raw_text: rawText,
+        reminder_type: "user_set",
+        message: intent.reminder_title || rawText.substring(0, 100),
+        original_text: rawText,
+        sent: false,
       })
-      .select("id, title, remind_at")
+      .select("id, message, remind_at")
       .single();
 
     if (error) throw error;
 
     const dt = new Date(reminder.remind_at);
     const dateStr = dt.toLocaleDateString("en-IN", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      year: "numeric",
+      weekday: "short", day: "numeric", month: "short", year: "numeric",
     });
     const timeStr = dt.toLocaleTimeString("en-IN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
+      hour: "2-digit", minute: "2-digit", hour12: true,
     });
 
-    await sendText(
-      from,
-      `⏰ *Reminder set!*\n\n📋 ${reminder.title}\n🗓️ ${dateStr}\n⏰ ${timeStr}\n\nI'll remind you when it's time!`
-    );
+    await sendText(from, `⏰ *Reminder set!*\n\n📋 ${reminder.message}\n🗓️ ${dateStr}\n⏰ ${timeStr}\n\nI'll remind you when it's time!`);
   } catch (err) {
     console.error("[reminder] Failed:", err);
     await sendText(from, "😓 Failed to set the reminder. Please try again.");
@@ -326,24 +309,22 @@ async function handleNote(from, userId, text, title) {
   try {
     const cleanText = text.replace(/^note\s*:\s*/i, "").trim();
 
+    // Store as document with document_type = "text_note"
     const { error } = await db()
       .from("documents")
       .insert({
         user_id: userId,
-        doc_type: "text_note",
-        mime_type: "text/plain",
-        file_size: Buffer.byteLength(cleanText, "utf-8"),
-        ocr_text: cleanText,
         category: "note",
         title: title || cleanText.substring(0, 50),
+        document_type: "text_note",
+        extracted_text: cleanText,
+        message_type: "text",
+        file_size_bytes: Buffer.byteLength(cleanText, "utf-8"),
       });
 
     if (error) throw error;
 
-    await sendText(
-      from,
-      `📝 *Note saved!*\n\n_${cleanText.substring(0, 150)}${cleanText.length > 150 ? "..." : ""}_\n\nYou can search for this later anytime.`
-    );
+    await sendText(from, `📝 *Note saved!*\n\n_${cleanText.substring(0, 150)}${cleanText.length > 150 ? "..." : ""}_\n\nYou can search for this later anytime.`);
   } catch (err) {
     console.error("[note] Failed:", err);
     await sendText(from, "😓 Failed to save the note. Please try again.");
@@ -352,21 +333,19 @@ async function handleNote(from, userId, text, title) {
 
 async function handleSearch(from, userId, query) {
   try {
-    const words = query
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .slice(0, 5);
+    const words = query.split(/\s+/).filter((w) => w.length > 2).slice(0, 5);
 
     if (words.length === 0) {
       await sendText(from, "🔍 Please use longer keywords to search.");
       return;
     }
 
-    const orConditions = words.map((w) => `ocr_text.ilike.%${w}%`).join(",");
+    // Search on extracted_text column
+    const orConditions = words.map((w) => `extracted_text.ilike.%${w}%`).join(",");
 
     const { data: results, error } = await db()
       .from("documents")
-      .select("id, doc_type, category, title, ocr_text, created_at")
+      .select("id, document_type, category, title, extracted_text, created_at")
       .eq("user_id", userId)
       .or(orConditions)
       .order("created_at", { ascending: false })
@@ -374,15 +353,13 @@ async function handleSearch(from, userId, query) {
 
     if (error) throw error;
 
+    // search_log columns: user_id, query_text, results_count
     await db()
       .from("search_log")
-      .insert({ user_id: userId, query, result_count: results?.length || 0 });
+      .insert({ user_id: userId, query_text: query, results_count: results?.length || 0 });
 
     if (!results || results.length === 0) {
-      await sendText(
-        from,
-        `🔍 No documents found for *"${query}"*.\n\nTry different keywords, or send me a document to save it first!`
-      );
+      await sendText(from, `🔍 No documents found for *"${query}"*.\n\nTry different keywords, or send me a document to save it first!`);
       return;
     }
 
@@ -390,43 +367,30 @@ async function handleSearch(from, userId, query) {
 
     results.forEach((doc, i) => {
       const date = new Date(doc.created_at).toLocaleDateString("en-IN", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
+        day: "numeric", month: "short", year: "numeric",
       });
-      const icon =
-        doc.doc_type === "photo"
-          ? "📸"
-          : doc.doc_type === "pdf"
-            ? "📄"
-            : doc.doc_type === "text_note"
-              ? "📝"
-              : "📎";
+      const icon = doc.document_type === "photo" ? "📸"
+        : doc.document_type === "pdf" ? "📄"
+        : doc.document_type === "text_note" ? "📝" : "📎";
       const title = doc.title || "Untitled";
-      const preview = doc.ocr_text
-        ? doc.ocr_text.substring(0, 100).replace(/\n/g, " ")
-        : "";
+      const preview = doc.extracted_text
+        ? doc.extracted_text.substring(0, 100).replace(/\n/g, " ") : "";
 
       reply += `${i + 1}. ${icon} *${title}*\n`;
-      reply += `   📁 ${doc.category || doc.doc_type} · ${date}\n`;
-      if (preview) {
-        reply += `   _${preview}${doc.ocr_text?.length > 100 ? "..." : ""}_\n`;
-      }
+      reply += `   📁 ${doc.category || doc.document_type} · ${date}\n`;
+      if (preview) reply += `   _${preview}${doc.extracted_text?.length > 100 ? "..." : ""}_\n`;
       reply += `\n`;
     });
 
     await sendText(from, reply.trim());
   } catch (err) {
     console.error("[search] Failed:", err);
-    await sendText(
-      from,
-      "😓 Search failed. Please try again with different keywords."
-    );
+    await sendText(from, "😓 Search failed. Please try again with different keywords.");
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// WHATSAPP API HELPERS
+// WHATSAPP API
 // ═══════════════════════════════════════════════════════════════
 async function sendText(to, body) {
   const url = `${GRAPH_API}/${process.env.META_PHONE_NUMBER_ID}/messages`;
@@ -437,15 +401,10 @@ async function sendText(to, body) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body },
+      messaging_product: "whatsapp", to, type: "text", text: { body },
     }),
   });
-  if (!res.ok) {
-    console.error(`[wa] sendText failed ${res.status}:`, await res.text());
-  }
+  if (!res.ok) console.error(`[wa] sendText failed ${res.status}:`, await res.text());
 }
 
 async function sendReaction(to, messageId, emoji) {
@@ -457,9 +416,7 @@ async function sendReaction(to, messageId, emoji) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "reaction",
+      messaging_product: "whatsapp", to, type: "reaction",
       reaction: { message_id: messageId, emoji },
     }),
   }).catch(() => {});
@@ -470,7 +427,6 @@ async function downloadMedia(mediaId) {
     headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
   });
   if (!metaRes.ok) throw new Error(`Media URL failed: ${metaRes.status}`);
-
   const meta = await metaRes.json();
 
   const dlRes = await fetch(meta.url, {
@@ -492,14 +448,9 @@ async function uploadToR2(buffer, mimeType, phone) {
   const key = `${phone}/${date}/${uuid}.${ext}`;
   const bucket = process.env.R2_BUCKET || "evara-documents";
 
-  await r2().send(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: mimeType,
-    })
-  );
+  await r2().send(new PutObjectCommand({
+    Bucket: bucket, Key: key, Body: buffer, ContentType: mimeType,
+  }));
 
   const url = `${process.env.R2_ENDPOINT}/${bucket}/${key}`;
   console.log(`[r2] Uploaded ${buffer.length} bytes → ${key}`);
@@ -510,10 +461,11 @@ async function uploadToR2(buffer, mimeType, phone) {
 // SUPABASE HELPERS
 // ═══════════════════════════════════════════════════════════════
 async function getOrCreateUser(phone) {
+  // users table column is phone_number (not phone)
   const { data: existing } = await db()
     .from("users")
     .select("id")
-    .eq("phone", phone)
+    .eq("phone_number", phone)
     .single();
 
   if (existing) return existing.id;
@@ -521,9 +473,9 @@ async function getOrCreateUser(phone) {
   const { data: newUser, error } = await db()
     .from("users")
     .insert({
-      phone,
+      phone_number: phone,
       plan: "free_trial",
-      trial_start: new Date().toISOString(),
+      trial_ends_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
     })
     .select("id")
     .single();
@@ -533,32 +485,18 @@ async function getOrCreateUser(phone) {
   return newUser.id;
 }
 
-async function storeDocument(doc) {
-  const { data, error } = await db()
-    .from("documents")
-    .insert(doc)
-    .select("id, doc_type, category, title")
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
 // ═══════════════════════════════════════════════════════════════
 // GEMINI API
 // ═══════════════════════════════════════════════════════════════
 async function callGemini(parts) {
-  const res = await fetch(
-    `${GEMINI_URL}?key=${process.env.GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-      }),
-    }
-  );
+  const res = await fetch(`${GEMINI_URL}?key=${process.env.GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+    }),
+  });
 
   if (!res.ok) {
     console.error(`[gemini] ${res.status}:`, await res.text());
@@ -579,7 +517,10 @@ Respond in this EXACT JSON format (no markdown, no code fences):
   "text": "full extracted text here",
   "category": "one of: bill, receipt, invoice, insurance, medical, government_id, certificate, bank_statement, tax, warranty, ticket, letter, other",
   "title": "short descriptive title like 'Electricity Bill - March 2026' or 'Aadhaar Card'",
-  "tags": ["tag1", "tag2", "tag3"]
+  "tags": ["tag1", "tag2", "tag3"],
+  "amount": "total amount if visible e.g. '1584' or null",
+  "organization": "vendor/issuer name if visible or null",
+  "language": "primary language e.g. 'en', 'hi', 'te'"
 }
 
 Rules:
@@ -602,9 +543,12 @@ Rules:
       category: parsed.category || "other",
       title: parsed.title || "Untitled Document",
       tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+      amount: parsed.amount || null,
+      organization: parsed.organization || null,
+      language: parsed.language || null,
     };
   } catch (e) {
-    return { text: raw, category: "other", title: "Untitled Document", tags: [] };
+    return { text: raw, category: "other", title: "Untitled Document", tags: [], amount: null, organization: null, language: null };
   }
 }
 
