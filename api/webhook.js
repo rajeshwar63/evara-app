@@ -616,7 +616,7 @@ Rules:
   ]);
 
   try {
-    const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    const cleaned = raw.replace(/^[\s\S]*?{/, "{").replace(/}[\s\S]*$/, "}").trim();
     const parsed = JSON.parse(cleaned);
     return {
       text: parsed.text || "",
