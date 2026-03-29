@@ -552,7 +552,7 @@ async function getOrCreateUser(phone) {
     .from("users")
     .insert({
       phone_number: phone,
-      plan: "free_trial",
+      plan: "free",
       trial_ends_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
     })
     .select("id")
