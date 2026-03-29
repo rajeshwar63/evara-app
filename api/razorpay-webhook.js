@@ -100,8 +100,29 @@ module.exports = async function handler(req, res) {
           `✓ Unlimited reminders\n` +
           `✓ Priority support\n\n` +
           `Payment ID: ${paymentId}\n\n` +
-          `Thank you for choosing Evara Pro! 🚀`
+          `Your invoice is being generated... 🧾`
         );
+      }
+
+      // Generate and send invoice
+      try {
+        const invoiceRes = await fetch("https://evara-app.vercel.app/api/generate-invoice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: referenceId,
+            payment_id: paymentId,
+            amount: amount,
+            phone_number: user.phone_number,
+          }),
+        });
+        if (invoiceRes.ok) {
+          console.log(`[razorpay] Invoice generated for user ${user.id}`);
+        } else {
+          console.error("[razorpay] Invoice generation failed:", await invoiceRes.text());
+        }
+      } catch (invoiceErr) {
+        console.error("[razorpay] Invoice error:", invoiceErr);
       }
 
       return res.status(200).json({ status: "ok", upgraded: true });
