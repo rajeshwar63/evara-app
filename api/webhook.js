@@ -568,21 +568,21 @@ async function sendPlanInfo(from, userId) {
     .select("plan, docs_this_month, reminders_this_month, storage_used_bytes")
     .eq("id", userId)
     .single();
-
-  const plan = user.plan === "free" ? "Free Forever" : "Pro";
+ 
+  const plan = user.plan === "free" ? "Free Forever" : user.plan === "individual" ? "Pro" : "Pro";
   const scansUsed = user.docs_this_month || 0;
   const scansLimit = user.plan === "free" ? 15 : "∞";
   const remindersUsed = user.reminders_this_month || 0;
   const remindersLimit = user.plan === "free" ? 30 : "∞";
   const storageMB = ((user.storage_used_bytes || 0) / (1024 * 1024)).toFixed(1);
   const storageLimitMB = user.plan === "free" ? 100 : 1024;
-
+ 
   let msg = `📊 *Your Evara Plan*\n\n`;
   msg += `📋 Plan: *${plan}*\n\n`;
   msg += `📸 Scans: ${scansUsed} / ${scansLimit} this month\n`;
   msg += `⏰ Reminders: ${remindersUsed} / ${remindersLimit} this month\n`;
   msg += `💾 Storage: ${storageMB} MB / ${storageLimitMB} MB\n`;
-
+ 
   if (user.plan === "free") {
     msg += `\n─────────────\n\n`;
     msg += `⬆️ *Upgrade to Pro — ₹299/year*\n\n`;
@@ -590,11 +590,68 @@ async function sendPlanInfo(from, userId) {
     msg += `✓ 1 GB storage\n`;
     msg += `✓ Unlimited reminders\n`;
     msg += `✓ Priority support\n\n`;
-    msg += `💳 Pay securely: https://rzp.io/rzp/a1F4Ljhw\n\n`;
-    msg += `📩 To upgrade, contact: wa.me/919398574255`;
+    msg += `That's just ₹25/month — less than a chai ☕\n`;
+ 
+    // Generate unique Razorpay payment link
+    const paymentLink = await createPaymentLink(userId, from);
+    if (paymentLink) {
+      msg += `\n💳 Pay securely: ${paymentLink}\n\n`;
+      msg += `✅ Your plan upgrades automatically after payment.`;
+    } else {
+      msg += `\n💳 Pay securely: https://rzp.io/rzp/a1F4Ljhw\n\n`;
+      msg += `After payment, send screenshot here and we'll activate Pro instantly.`;
+    }
+  } else {
+    msg += `\n\n✅ You're on Pro! Enjoy unlimited access.`;
   }
-
+ 
   await sendText(from, msg);
+}
+ 
+async function createPaymentLink(userId, phone) {
+  try {
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+ 
+    if (!keyId || !keySecret) return null;
+ 
+    const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+ 
+    const res = await fetch("https://api.razorpay.com/v1/payment_links", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        amount: 29900, // ₹299 in paise
+        currency: "INR",
+        description: "Evara Pro - 1 Year Plan",
+        reference_id: userId, // This links payment to the user
+        customer: {
+          contact: `+${phone}`, // Pre-fill phone number
+        },
+        notify: {
+          sms: false,
+          email: false,
+        },
+        callback_url: "https://evara-app.com",
+        callback_method: "get",
+      }),
+    });
+ 
+    if (!res.ok) {
+      console.error("[razorpay] Create link failed:", await res.text());
+      return null;
+    }
+ 
+    const data = await res.json();
+    console.log(`[razorpay] Created payment link: ${data.short_url} for user ${userId}`);
+    return data.short_url;
+  } catch (err) {
+    console.error("[razorpay] Error creating payment link:", err);
+    return null;
+  }
 }
 
 async function sendReaction(to, messageId, emoji) {
