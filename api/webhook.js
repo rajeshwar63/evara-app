@@ -83,11 +83,11 @@ module.exports = async function handler(req, res) {
 
   // POST: Incoming messages
   if (req.method === "POST") {
-    res.status(200).json({ status: "ok" });
-
     try {
       const value = req.body?.entry?.[0]?.changes?.[0]?.value;
-      if (!value?.messages?.length) return;
+      if (!value?.messages?.length) {
+        return res.status(200).json({ status: "ok" });
+      }
 
       const message = value.messages[0];
       const from = message.from;
@@ -98,7 +98,7 @@ module.exports = async function handler(req, res) {
     } catch (err) {
       console.error("[webhook] Error:", err);
     }
-    return;
+    return res.status(200).json({ status: "ok" });
   }
 
   return res.status(405).send("Method Not Allowed");
