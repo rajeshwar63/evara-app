@@ -166,6 +166,7 @@ async function sendGreeting(from, senderName) {
 📝 *note:* your text — saves a quick note
 ⏰ *Remind me...* — sets a reminder
 📂 *my docs* — manage & delete your files
+📊 *plan* — check usage & upgrade
 
 Try it — send me a document now!`;
 
@@ -261,6 +262,29 @@ async function handleMedia(from, media, type, messageId) {
     if (media.caption) reply += `\n📎 Your note: _${media.caption}_`;
 
     await sendText(from, reply);
+
+    // Soft nudge at 80% for free users
+    const { data: userData } = await db()
+      .from("users")
+      .select("plan, docs_this_month")
+      .eq("id", userId)
+      .single();
+
+    if (userData) {
+      const scanCount = (userData.docs_this_month || 0) + 1;
+      await db().from("users").update({ docs_this_month: scanCount }).eq("id", userId);
+
+      if (userData.plan === "free" && scanCount >= 12) {
+        const remaining = 15 - scanCount;
+        if (remaining > 0) {
+          await sendText(from,
+            `💡 You have *${remaining}* free scan${remaining === 1 ? '' : 's'} left this month.\n\n` +
+            `Upgrade to *Pro* for ₹299/year — unlimited scans, 1GB storage.\n` +
+            `Type *plan* to learn more.`
+          );
+        }
+      }
+    }
   } catch (err) {
     console.error(`[media] Failed for ${from}:`, err);
     await sendReaction(from, messageId, "❌");
@@ -274,6 +298,13 @@ async function handleMedia(from, media, type, messageId) {
 async function handleTextInput(from, text, messageId) {
   const userId = await getOrCreateUser(from);
   const lower = text.toLowerCase().trim();
+
+  // "plan" / "upgrade" → show plan info
+  const planPattern = /^(plan|upgrade|my plan|subscription|billing|usage|limit|status)$/i;
+  if (planPattern.test(lower)) {
+    await sendPlanInfo(from, userId);
+    return;
+  }
 
   // "my docs" / "dashboard" / "manage" → generate dashboard link
   const dashboardPattern = /^(my docs|my documents|dashboard|manage|manage docs|delete)$/i;
@@ -505,6 +536,40 @@ async function sendDashboardLink(from, userId) {
     `⏰ This link expires in 24 hours.\n` +
     `🔒 Only you can access it.`
   );
+}
+
+async function sendPlanInfo(from, userId) {
+  const { data: user } = await db()
+    .from("users")
+    .select("plan, docs_this_month, reminders_this_month, storage_used_bytes")
+    .eq("id", userId)
+    .single();
+
+  const plan = user.plan === "free" ? "Free Forever" : "Pro";
+  const scansUsed = user.docs_this_month || 0;
+  const scansLimit = user.plan === "free" ? 15 : "∞";
+  const remindersUsed = user.reminders_this_month || 0;
+  const remindersLimit = user.plan === "free" ? 30 : "∞";
+  const storageMB = ((user.storage_used_bytes || 0) / (1024 * 1024)).toFixed(1);
+  const storageLimitMB = user.plan === "free" ? 100 : 1024;
+
+  let msg = `📊 *Your Evara Plan*\n\n`;
+  msg += `📋 Plan: *${plan}*\n\n`;
+  msg += `📸 Scans: ${scansUsed} / ${scansLimit} this month\n`;
+  msg += `⏰ Reminders: ${remindersUsed} / ${remindersLimit} this month\n`;
+  msg += `💾 Storage: ${storageMB} MB / ${storageLimitMB} MB\n`;
+
+  if (user.plan === "free") {
+    msg += `\n─────────────\n\n`;
+    msg += `⬆️ *Upgrade to Pro — ₹299/year*\n\n`;
+    msg += `✓ Unlimited scans\n`;
+    msg += `✓ 1 GB storage\n`;
+    msg += `✓ Unlimited reminders\n`;
+    msg += `✓ Priority support\n\n`;
+    msg += `📩 To upgrade, contact: wa.me/919398574255`;
+  }
+
+  await sendText(from, msg);
 }
 
 async function sendReaction(to, messageId, emoji) {
