@@ -281,6 +281,13 @@ async function handleTextInput(from, text, messageId) {
   const userId = await getOrCreateUser(from);
   const lower = text.toLowerCase().trim();
 
+  // "my docs" / "dashboard" / "manage" → generate dashboard link
+  const dashboardPattern = /^(my docs|my documents|dashboard|manage|manage docs|delete)$/i;
+  if (dashboardPattern.test(lower)) {
+    await sendDashboardLink(from, userId);
+    return;
+  }
+
   // "note:" or "save:" prefix → save as note
   if (lower.startsWith("note:") || lower.startsWith("save:")) {
     const noteText = text.replace(/^(note|save)\s*:\s*/i, "").trim();
@@ -483,6 +490,27 @@ async function sendText(to, body) {
     }),
   });
   if (!res.ok) console.error(`[wa] sendText failed ${res.status}:`, await res.text());
+}
+
+async function sendDashboardLink(from, userId) {
+  const token = randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  await db().from("dashboard_tokens").insert({
+    user_id: userId,
+    token: token,
+    expires_at: expiresAt,
+  });
+
+  const link = `https://evara-app.com/dashboard.html?token=${token}`;
+
+  await sendText(from,
+    `📂 *Your Document Dashboard*\n\n` +
+    `Tap the link below to view, preview, and delete your documents:\n\n` +
+    `🔗 ${link}\n\n` +
+    `⏰ This link expires in 24 hours.\n` +
+    `🔒 Only you can access it.`
+  );
 }
 
 async function sendReaction(to, messageId, emoji) {
