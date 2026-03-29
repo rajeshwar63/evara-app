@@ -208,16 +208,28 @@ async function handleMedia(from, media, type, messageId) {
     const { key, url } = await uploadToR2(buffer, mimeType, from);
 
     let ocrData;
-    if (mimeType === "application/pdf") {
-      // For PDFs: only send first page worth of data (max 500KB) + filename
-      const maxBytes = 500 * 1024;
-      const trimmedBuffer = buffer.length > maxBytes ? buffer.slice(0, maxBytes) : buffer;
-      const base64 = trimmedBuffer.toString("base64");
-      const filename = media.filename || "document.pdf";
-      ocrData = await ocrDocument(base64, mimeType, filename);
-    } else {
-      const base64 = buffer.toString("base64");
-      ocrData = await ocrDocument(base64, mimeType);
+    try {
+      if (mimeType === "application/pdf") {
+        const maxBytes = 500 * 1024;
+        const trimmedBuffer = buffer.length > maxBytes ? buffer.slice(0, maxBytes) : buffer;
+        const base64 = trimmedBuffer.toString("base64");
+        const filename = media.filename || "document.pdf";
+        ocrData = await ocrDocument(base64, mimeType, filename);
+      } else {
+        const base64 = buffer.toString("base64");
+        ocrData = await ocrDocument(base64, mimeType);
+      }
+    } catch (ocrErr) {
+      console.error("[media] OCR failed, saving with basic metadata:", ocrErr.message);
+      ocrData = {
+        text: "",
+        category: "other",
+        title: media.filename || "Untitled Document",
+        tags: [],
+        amount: null,
+        organization: null,
+        language: null,
+      };
     }
     const ocr = ocrData;
 
