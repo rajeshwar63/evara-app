@@ -159,21 +159,15 @@ async function routeMessage(message, from, senderName) {
 // ═══════════════════════════════════════════════════════════════
 async function sendGreeting(from, senderName) {
   const name = senderName?.split(" ")[0] || "there";
-  const welcome = `👋 Hi ${name}! Welcome to *Evara* — your personal document organizer on WhatsApp.
+  const welcome = `👋 Hi ${name}! I'm *Evara* — your document organizer on WhatsApp.
 
-Here's what I can do:
+📸 Send a *photo* or 📄 *PDF* — I'll scan, organize & save it
+🔍 *Search* — just type what you're looking for
+📝 *note:* your text — saves a quick note
+⏰ *Remind me...* — sets a reminder
+📂 *my docs* — manage & delete your files
 
-📸 *Send a photo* of any document (bill, receipt, Aadhaar, PAN, etc.) — I'll read it, organize it, and save it for you.
-
-📄 *Send a PDF* — same magic, I'll extract all the text and file it.
-
-📝 *Type a note* — I'll save it for you. Just write naturally, like "Note: Rent paid ₹15,000 for March".
-
-⏰ *Set a reminder* — "Remind me to renew insurance on April 15" or "Kal subah 8 baje yaad dilao gym jaana hai".
-
-🔍 *Search your docs* — "Find my electricity bill" or "Show Aadhaar" — I'll find it instantly.
-
-Just send me something to get started! 🚀`;
+Try it — send me a document now!`;
 
   await sendText(from, welcome);
 }
