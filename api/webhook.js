@@ -251,20 +251,27 @@ async function handleMedia(from, media, type, messageId) {
 // ═══════════════════════════════════════════════════════════════
 async function handleTextInput(from, text, messageId) {
   const userId = await getOrCreateUser(from);
-  const intent = await classifyTextIntent(text);
+  const lower = text.toLowerCase().trim();
 
-  switch (intent.intent) {
-    case "reminder":
-      await handleReminder(from, userId, text, intent);
-      break;
-    case "note":
-      await handleNote(from, userId, text, intent.note_title);
-      break;
-    case "search":
-    default:
-      await handleSearch(from, userId, text);
-      break;
+  // "note:" or "save:" prefix → save as note
+  if (lower.startsWith("note:") || lower.startsWith("save:")) {
+    const noteText = text.replace(/^(note|save)\s*:\s*/i, "").trim();
+    await handleNote(from, userId, noteText);
+    return;
   }
+
+  // Reminder keywords → classify with Gemini
+  const reminderPattern = /\b(remind|reminder|yaad|alert|dilao|baje)\b/i;
+  if (reminderPattern.test(lower)) {
+    const intent = await classifyTextIntent(text);
+    if (intent.intent === "reminder") {
+      await handleReminder(from, userId, text, intent);
+      return;
+    }
+  }
+
+  // Everything else → search
+  await handleSearch(from, userId, text);
 }
 
 async function handleReminder(from, userId, rawText, intent) {
