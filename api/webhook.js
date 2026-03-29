@@ -168,7 +168,8 @@ async function sendGreeting(from, senderName) {
 📝 *note:* your text — saves a note
 ⏰ *Remind me...* — sets a reminder
 📂 *my docs* — manage your files
-📊 *plan* — check usage
+📊 *plan* — check usage, 
+⬆️ *upgrade* — go Pro for ₹299/year
 🔒 *privacy* — how your data is protected
 
 Send me a document to get started!`;
