@@ -120,7 +120,7 @@ async function processMessages(env: Env, messages: InboundMessage[]): Promise<vo
         await sendTextReply(
           env,
           message.from,
-          "Oops! Something went wrong processing your message. Please try again.",
+          "Error: " + (err instanceof Error ? err.message : String(err)),
         );
       } catch (replyErr) {
         console.error("Failed to send error reply:", replyErr);
