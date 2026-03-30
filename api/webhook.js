@@ -105,7 +105,6 @@ module.exports = async function handler(req, res) {
 // ═══════════════════════════════════════════════════════════════
 async function routeMessage(message, from, senderName) {
   try {
-    // Log inbound — columns: wa_message_id, direction, message_type, content_preview, processed
     await db()
       .from("messages_log")
       .insert({
@@ -169,7 +168,7 @@ async function sendGreeting(from, senderName) {
 ⏰ *Remind me...* — sets a reminder
 📂 *my docs* — manage your files
 📊 *plan* — check usage
-⬆️ *upgrade* — go Pro for ₹299/year
+⬆️ *upgrade* — go Pro for ₹299/year (all features!)
 🔒 *privacy* — how your data is protected
 
 Send me a document to get started!`;
@@ -184,7 +183,6 @@ function mapCategory(cat) {
   const valid = ["identity", "medical", "financial", "education", "receipt", "legal", "insurance", "travel", "note", "other"];
   if (valid.includes(cat)) return cat;
 
-  // Map old/wrong categories to valid ones
   const map = {
     bill: "financial",
     invoice: "financial",
@@ -229,14 +227,13 @@ async function handleMedia(from, media, type, messageId) {
         amount: null,
         organization: null,
         language: null,
+        expiry_date: null,
+        due_date: null,
       };
     }
     const ocr = ocrData;
 
-    // documents columns: user_id, wa_message_id, category, title, document_type,
-    // extracted_text, amount, organization, language_detected, tags,
-    // message_type, file_url, file_key, file_type, file_size_bytes
-    const { error } = await db()
+    const { data: docRow, error } = await db()
       .from("documents")
       .insert({
         user_id: userId,
@@ -254,7 +251,9 @@ async function handleMedia(from, media, type, messageId) {
         file_key: key,
         file_type: mimeType,
         file_size_bytes: buffer.length,
-      });
+      })
+      .select("id")
+      .single();
 
     if (error) throw error;
 
@@ -277,20 +276,75 @@ async function handleMedia(from, media, type, messageId) {
     reply += `\n\n⏱️ Processed in ${elapsed}s`;
     if (media.caption) reply += `\n📎 Your note: _${media.caption}_`;
 
+    // ── AUTO-REMINDER from document dates (Smart plan feature preview) ──
+    // Even for free/pro users, we extract and mention dates found.
+    // Auto-reminder creation is gated to Smart plan.
+    if (ocr.expiry_date || ocr.due_date) {
+      const dateFound = ocr.expiry_date || ocr.due_date;
+      const dateLabel = ocr.expiry_date ? "Expiry date" : "Due date";
+      reply += `\n\n📅 *${dateLabel} detected:* ${dateFound}`;
+
+      // Check user plan for auto-reminder
+      const { data: userData } = await db()
+        .from("users")
+        .select("plan")
+        .eq("id", userId)
+        .single();
+
+      if (userData && (userData.plan === "individual" || userData.plan === "smart" || userData.plan === "family")) {
+        // Auto-create reminder 7 days before expiry, or on due date
+        try {
+          const targetDate = new Date(dateFound);
+          let reminderDate;
+          if (ocr.expiry_date) {
+            // Remind 7 days before expiry
+            reminderDate = new Date(targetDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+          } else {
+            // Remind on due date morning (9 AM IST)
+            reminderDate = new Date(targetDate);
+            reminderDate.setHours(3, 30, 0, 0); // 9 AM IST = 3:30 UTC
+          }
+
+          // Only create if reminder date is in the future
+          if (reminderDate > new Date()) {
+            await db().from("reminders").insert({
+              user_id: userId,
+              remind_at: reminderDate.toISOString(),
+              reminder_type: ocr.expiry_date ? "expiry" : "custom",
+              message: `📄 ${ocr.title} — ${dateLabel}: ${dateFound}`,
+              original_text: `Auto-reminder from document: ${ocr.title}`,
+              sent: false,
+              status: "pending",
+              linked_document_id: docRow.id,
+            });
+
+            const reminderDateStr = reminderDate.toLocaleDateString("en-IN", {
+              day: "numeric", month: "short", year: "numeric",
+            });
+            reply += `\n⏰ Auto-reminder set for *${reminderDateStr}*`;
+          }
+        } catch (autoErr) {
+          console.error("[media] Auto-reminder failed:", autoErr.message);
+        }
+      } else {
+        reply += `\n💡 _Upgrade to *Pro (₹299/yr)* for auto-reminders from documents!_`;
+      }
+    }
+
     await sendText(from, reply);
 
     // Soft nudge at 80% for free users
-    const { data: userData } = await db()
+    const { data: userData2 } = await db()
       .from("users")
       .select("plan, docs_this_month")
       .eq("id", userId)
       .single();
 
-    if (userData) {
-      const scanCount = (userData.docs_this_month || 0) + 1;
+    if (userData2) {
+      const scanCount = (userData2.docs_this_month || 0) + 1;
       await db().from("users").update({ docs_this_month: scanCount }).eq("id", userId);
 
-      if (userData.plan === "free" && scanCount >= 12) {
+      if (userData2.plan === "free" && scanCount >= 12) {
         const remaining = 15 - scanCount;
         if (remaining > 0) {
           await sendText(from,
@@ -309,7 +363,7 @@ async function handleMedia(from, media, type, messageId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// TEXT INPUT HANDLER
+// TEXT INPUT HANDLER  (updated with reminder reply handling)
 // ═══════════════════════════════════════════════════════════════
 async function handleTextInput(from, text, messageId) {
   const userId = await getOrCreateUser(from);
@@ -328,27 +382,35 @@ async function handleTextInput(from, text, messageId) {
     await sendDashboardLink(from, userId);
     return;
   }
-  
-const privacyPattern = /^(privacy|security|data|how is my data|trust|safe|secure)$/i;
-if (privacyPattern.test(lower)) {
-  await sendText(from,
-    `🔒 *How Evara Protects Your Data*\n\n` +
-    `📍 Your documents are stored on encrypted cloud servers — same infrastructure used by major companies.\n\n` +
-    `👤 Only YOU can access your documents. No one else — not even us — can see your files.\n\n` +
-    `🗑️ Delete anytime — type *my docs* to manage & delete.\n\n` +
-    `🚫 We NEVER share, sell, or use your data for ads.\n\n` +
-    `📋 *What we store:*\n` +
-    `• The photo/PDF you send (encrypted)\n` +
-    `• Extracted text (for search)\n` +
-    `• Your phone number (to identify you)\n\n` +
-    `📋 *What we DON'T do:*\n` +
-    `• No sharing with third parties\n` +
-    `• No training AI on your documents\n` +
-    `• No access to your WhatsApp chats\n\n` +
-    `🔗 Full policy: evara-app.com/privacy.html`
-  );
-  return;
-}
+
+  const privacyPattern = /^(privacy|security|data|how is my data|trust|safe|secure)$/i;
+  if (privacyPattern.test(lower)) {
+    await sendText(from,
+      `🔒 *How Evara Protects Your Data*\n\n` +
+      `📍 Your documents are stored on encrypted cloud servers — same infrastructure used by major companies.\n\n` +
+      `👤 Only YOU can access your documents. No one else — not even us — can see your files.\n\n` +
+      `🗑️ Delete anytime — type *my docs* to manage & delete.\n\n` +
+      `🚫 We NEVER share, sell, or use your data for ads.\n\n` +
+      `📋 *What we store:*\n` +
+      `• The photo/PDF you send (encrypted)\n` +
+      `• Extracted text (for search)\n` +
+      `• Your phone number (to identify you)\n\n` +
+      `📋 *What we DON'T do:*\n` +
+      `• No sharing with third parties\n` +
+      `• No training AI on your documents\n` +
+      `• No access to your WhatsApp chats\n\n` +
+      `🔗 Full policy: evara-app.com/privacy.html`
+    );
+    return;
+  }
+
+  // "my reminders" → show active reminders
+  const remindersListPattern = /^(my reminders|reminders|active reminders|pending reminders)$/i;
+  if (remindersListPattern.test(lower)) {
+    await sendActiveReminders(from, userId);
+    return;
+  }
+
   // "note:" or "save:" prefix → save as note
   if (lower.startsWith("note:") || lower.startsWith("save:")) {
     const noteText = text.replace(/^(note|save)\s*:\s*/i, "").trim();
@@ -356,7 +418,27 @@ if (privacyPattern.test(lower)) {
     return;
   }
 
-  // Reminder keywords → classify with Gemini
+  // ── CHECK: Is this a reply to an active reminder? ──
+  // Quick check for common reminder reply words before hitting Gemini
+  const reminderReplyPattern = /\b(done|completed|finish|ho gaya|kar diya|kar liya|hogaya|complete|cancel|stop|band|snooze|later|not now|baad me|kal|remind me)\b/i;
+  if (reminderReplyPattern.test(lower)) {
+    // Check if user has any active reminders
+    const { data: activeReminders } = await db()
+      .from("reminders")
+      .select("id, message, status, notification_count")
+      .eq("user_id", userId)
+      .in("status", ["active", "snoozed"])
+      .order("last_notified_at", { ascending: false })
+      .limit(5);
+
+    if (activeReminders && activeReminders.length > 0) {
+      // Use Gemini to classify the reminder reply
+      const handled = await handleReminderReply(from, userId, text, activeReminders);
+      if (handled) return;
+    }
+  }
+
+  // Reminder keywords → classify with Gemini (for NEW reminders)
   const reminderPattern = /\b(remind|reminder|yaad|alert|dilao|baje)\b/i;
   if (reminderPattern.test(lower)) {
     const intent = await classifyTextIntent(text);
@@ -370,6 +452,197 @@ if (privacyPattern.test(lower)) {
   await handleSearch(from, userId, text);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// REMINDER REPLY HANDLER (NEW)
+// ═══════════════════════════════════════════════════════════════
+async function handleReminderReply(from, userId, text, activeReminders) {
+  try {
+    const remindersList = activeReminders.map((r, i) =>
+      `${i + 1}. [ID: ${r.id}] "${r.message}" (buzzed ${r.notification_count} times)`
+    ).join("\n");
+
+    const prompt = `You are a WhatsApp reminder assistant for Indian users.
+
+The user has these ACTIVE reminders:
+${remindersList}
+
+User's reply: "${text}"
+
+Classify the user's intent as ONE of:
+1. "complete" — user says they finished the task (done, completed, ho gaya, kar diya, ✅, haan, yes, finished)
+2. "snooze" — user wants to delay (snooze, later, not now, baad me, remind me in X, kal yaad dilao)
+3. "cancel" — user wants to permanently stop this reminder (cancel, stop, delete, band karo, hatao)
+4. "details" — user is asking what the reminder is about (kya tha, what, details, batao)
+5. "not_reminder_reply" — the message is NOT about any active reminder
+
+Respond in EXACT JSON (no markdown, no code fences):
+{
+  "action": "complete|snooze|cancel|details|not_reminder_reply",
+  "reminder_id": "the UUID of the most relevant reminder, or null",
+  "snooze_hours": number or null (how many hours to snooze, default 2),
+  "snooze_until_datetime": "ISO 8601 if user specified exact time, or null"
+}
+
+Rules:
+- If user says "done" without specifying which reminder, pick the most recently buzzed one
+- "kal" = tomorrow 9 AM IST, "parso" = day after tomorrow 9 AM IST
+- "2 ghante baad" = 2 hours, "1 hour" = 1 hour
+- If the message doesn't seem related to any active reminder, return "not_reminder_reply"`;
+
+    const raw = await callGemini([{ text: prompt }]);
+    const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    const result = JSON.parse(cleaned);
+
+    if (result.action === "not_reminder_reply") {
+      return false; // Let the normal flow handle it
+    }
+
+    const reminderId = result.reminder_id;
+    if (!reminderId) {
+      return false;
+    }
+
+    switch (result.action) {
+      case "complete": {
+        await db().from("reminders").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+        }).eq("id", reminderId).eq("user_id", userId);
+
+        const reminder = activeReminders.find(r => r.id === reminderId);
+        await sendText(from,
+          `✅ *Reminder completed!*\n\n` +
+          `📋 ~~${reminder?.message || "Task"}~~\n\n` +
+          `Great job! 💪`
+        );
+        return true;
+      }
+
+      case "snooze": {
+        let snoozeUntil;
+        if (result.snooze_until_datetime) {
+          snoozeUntil = new Date(result.snooze_until_datetime);
+        } else {
+          const hours = result.snooze_hours || 2;
+          snoozeUntil = new Date(Date.now() + hours * 60 * 60 * 1000);
+        }
+
+        await db().from("reminders").update({
+          status: "snoozed",
+          snooze_until: snoozeUntil.toISOString(),
+        }).eq("id", reminderId).eq("user_id", userId);
+
+        const timeStr = snoozeUntil.toLocaleTimeString("en-IN", {
+          hour: "2-digit", minute: "2-digit", hour12: true,
+          timeZone: "Asia/Kolkata",
+        });
+        const dateStr = snoozeUntil.toLocaleDateString("en-IN", {
+          day: "numeric", month: "short",
+          timeZone: "Asia/Kolkata",
+        });
+
+        const reminder = activeReminders.find(r => r.id === reminderId);
+        await sendText(from,
+          `⏰ *Reminder snoozed!*\n\n` +
+          `📋 ${reminder?.message || "Task"}\n` +
+          `🔔 Next buzz: *${dateStr} at ${timeStr}*\n\n` +
+          `_I'll keep reminding until you say "done"!_`
+        );
+        return true;
+      }
+
+      case "cancel": {
+        await db().from("reminders").update({
+          status: "cancelled",
+        }).eq("id", reminderId).eq("user_id", userId);
+
+        const reminder = activeReminders.find(r => r.id === reminderId);
+        await sendText(from,
+          `❌ *Reminder cancelled.*\n\n` +
+          `📋 ~~${reminder?.message || "Task"}~~\n\n` +
+          `This reminder won't buzz again.`
+        );
+        return true;
+      }
+
+      case "details": {
+        const reminder = activeReminders.find(r => r.id === reminderId);
+        if (reminder) {
+          let msg = `📋 *Reminder Details*\n\n`;
+          msg += `📝 ${reminder.message}\n`;
+          msg += `🔔 Buzzed ${reminder.notification_count} time${reminder.notification_count !== 1 ? 's' : ''}\n\n`;
+          msg += `Reply *done* to complete or *snooze* to delay.`;
+          await sendText(from, msg);
+        }
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  } catch (err) {
+    console.error("[reminderReply] Error:", err);
+    return false; // Fall through to normal flow
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SHOW ACTIVE REMINDERS (NEW)
+// ═══════════════════════════════════════════════════════════════
+async function sendActiveReminders(from, userId) {
+  try {
+    const { data: reminders, error } = await db()
+      .from("reminders")
+      .select("id, message, remind_at, status, notification_count")
+      .eq("user_id", userId)
+      .in("status", ["pending", "active", "snoozed"])
+      .order("remind_at", { ascending: true })
+      .limit(10);
+
+    if (error) throw error;
+
+    if (!reminders || reminders.length === 0) {
+      await sendText(from, `📭 You have no active reminders.\n\nSet one by saying: _Remind me to pay rent on April 5_`);
+      return;
+    }
+
+    let msg = `⏰ *Your Active Reminders*\n\n`;
+
+    for (let i = 0; i < reminders.length; i++) {
+      const r = reminders[i];
+      const dt = new Date(r.remind_at);
+      const dateStr = dt.toLocaleDateString("en-IN", {
+        day: "numeric", month: "short",
+        timeZone: "Asia/Kolkata",
+      });
+      const timeStr = dt.toLocaleTimeString("en-IN", {
+        hour: "2-digit", minute: "2-digit", hour12: true,
+        timeZone: "Asia/Kolkata",
+      });
+
+      const statusIcon = r.status === "active" ? "🔔"
+        : r.status === "snoozed" ? "💤"
+        : "⏳";
+
+      msg += `${i + 1}. ${statusIcon} *${r.message}*\n`;
+      msg += `   📅 ${dateStr} at ${timeStr}`;
+      if (r.notification_count > 0) {
+        msg += ` · buzzed ${r.notification_count}x`;
+      }
+      msg += `\n\n`;
+    }
+
+    msg += `Reply *done* to complete a task, or *cancel* to stop one.`;
+    await sendText(from, msg);
+  } catch (err) {
+    console.error("[activeReminders] Error:", err);
+    await sendText(from, "😓 Couldn't fetch your reminders. Please try again.");
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REMINDER HANDLER (updated to include status field)
+// ═══════════════════════════════════════════════════════════════
 async function handleReminder(from, userId, rawText, intent) {
   try {
     if (!intent.reminder_datetime) {
@@ -377,7 +650,6 @@ async function handleReminder(from, userId, rawText, intent) {
       return;
     }
 
-    // reminders columns: user_id, remind_at, reminder_type, message, original_text, sent
     const { data: reminder, error } = await db()
       .from("reminders")
       .insert({
@@ -387,6 +659,7 @@ async function handleReminder(from, userId, rawText, intent) {
         message: intent.reminder_title || rawText.substring(0, 100),
         original_text: rawText,
         sent: false,
+        status: "pending",
       })
       .select("id, message, remind_at")
       .single();
@@ -396,12 +669,20 @@ async function handleReminder(from, userId, rawText, intent) {
     const dt = new Date(reminder.remind_at);
     const dateStr = dt.toLocaleDateString("en-IN", {
       weekday: "short", day: "numeric", month: "short", year: "numeric",
+      timeZone: "Asia/Kolkata",
     });
     const timeStr = dt.toLocaleTimeString("en-IN", {
       hour: "2-digit", minute: "2-digit", hour12: true,
+      timeZone: "Asia/Kolkata",
     });
 
-    await sendText(from, `⏰ *Reminder set!*\n\n📋 ${reminder.message}\n🗓️ ${dateStr}\n⏰ ${timeStr}\n\nI'll remind you when it's time!`);
+    await sendText(from,
+      `⏰ *Reminder set!*\n\n` +
+      `📋 ${reminder.message}\n` +
+      `🗓️ ${dateStr}\n` +
+      `⏰ ${timeStr}\n\n` +
+      `🔔 _I'll keep buzzing every 2 hours until you reply "done"!_`
+    );
   } catch (err) {
     console.error("[reminder] Failed:", err);
     await sendText(from, "😓 Failed to set the reminder. Please try again.");
@@ -412,7 +693,6 @@ async function handleNote(from, userId, text, title) {
   try {
     const cleanText = text.replace(/^note\s*:\s*/i, "").trim();
 
-    // Store as document with document_type = "text_note"
     const { error } = await db()
       .from("documents")
       .insert({
@@ -443,7 +723,6 @@ async function handleSearch(from, userId, query) {
       return;
     }
 
-    // Search on extracted_text column
     const orConditions = words.map((w) => `extracted_text.ilike.%${w}%`).join(",");
 
     const { data: results, error } = await db()
@@ -456,7 +735,6 @@ async function handleSearch(from, userId, query) {
 
     if (error) throw error;
 
-    // search_log columns: user_id, query_text, results_count
     await db()
       .from("search_log")
       .insert({ user_id: userId, query_text: query, results_count: results?.length || 0 });
@@ -484,7 +762,6 @@ async function handleSearch(from, userId, query) {
 
     await sendText(from, reply.trim());
 
-    // Send actual files back in chat (max 3 to avoid spam)
     const fileDocs = results.filter((d) => d.file_key).slice(0, 3);
     for (const doc of fileDocs) {
       try {
@@ -580,31 +857,34 @@ async function sendPlanInfo(from, userId) {
     .select("plan, docs_this_month, reminders_this_month, storage_used_bytes")
     .eq("id", userId)
     .single();
- 
-  const plan = user.plan === "free" ? "Free Forever" : user.plan === "individual" ? "Pro" : "Pro";
+
+  const isPaid = user.plan !== "free";
+  const plan = isPaid ? "Pro (₹299/yr)" : "Free Forever";
   const scansUsed = user.docs_this_month || 0;
-  const scansLimit = user.plan === "free" ? 15 : "∞";
+  const scansLimit = isPaid ? "∞" : 15;
   const remindersUsed = user.reminders_this_month || 0;
-  const remindersLimit = user.plan === "free" ? 30 : "∞";
+  const remindersLimit = isPaid ? "∞" : 30;
   const storageMB = ((user.storage_used_bytes || 0) / (1024 * 1024)).toFixed(1);
-  const storageLimitMB = user.plan === "free" ? 100 : 1024;
- 
+  const storageLimitMB = isPaid ? 2048 : 100;
+
   let msg = `📊 *Your Evara Plan*\n\n`;
   msg += `📋 Plan: *${plan}*\n\n`;
   msg += `📸 Scans: ${scansUsed} / ${scansLimit} this month\n`;
   msg += `⏰ Reminders: ${remindersUsed} / ${remindersLimit} this month\n`;
   msg += `💾 Storage: ${storageMB} MB / ${storageLimitMB} MB\n`;
- 
-  if (user.plan === "free") {
+
+  if (!isPaid) {
     msg += `\n─────────────\n\n`;
     msg += `⬆️ *Upgrade to Pro — ₹299/year*\n\n`;
-    msg += `✓ Unlimited scans\n`;
-    msg += `✓ 1 GB storage\n`;
+    msg += `✓ Unlimited scans & storage (2 GB)\n`;
     msg += `✓ Unlimited reminders\n`;
+    msg += `✓ Auto-reminders from documents\n`;
+    msg += `✓ Expiry & due date alerts\n`;
+    msg += `✓ Finance tracking & summaries\n`;
+    msg += `✓ Smart nudges\n`;
     msg += `✓ Priority support\n\n`;
     msg += `That's just ₹25/month — less than a chai ☕\n`;
- 
-    // Generate unique Razorpay payment link
+
     const paymentLink = await createPaymentLink(userId, from);
     if (paymentLink) {
       msg += `\n💳 Pay securely: ${paymentLink}\n\n`;
@@ -614,21 +894,21 @@ async function sendPlanInfo(from, userId) {
       msg += `After payment, send screenshot here and we'll activate Pro instantly.`;
     }
   } else {
-    msg += `\n\n✅ You're on Pro! Enjoy unlimited access.`;
+    msg += `\n\n✅ You're on Pro! All features unlocked. Enjoy!`;
   }
- 
+
   await sendText(from, msg);
 }
- 
+
 async function createPaymentLink(userId, phone) {
   try {
     const keyId = process.env.RAZORPAY_KEY_ID;
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
- 
+
     if (!keyId || !keySecret) return null;
- 
+
     const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
- 
+
     const res = await fetch("https://api.razorpay.com/v1/payment_links", {
       method: "POST",
       headers: {
@@ -636,12 +916,12 @@ async function createPaymentLink(userId, phone) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        amount: 29900, // ₹299 in paise
+        amount: 29900,
         currency: "INR",
         description: "Evara Pro - 1 Year Plan",
-        reference_id: userId, // This links payment to the user
+        reference_id: userId,
         customer: {
-          contact: `+${phone}`, // Pre-fill phone number
+          contact: `+${phone}`,
         },
         notify: {
           sms: false,
@@ -651,12 +931,12 @@ async function createPaymentLink(userId, phone) {
         callback_method: "get",
       }),
     });
- 
+
     if (!res.ok) {
       console.error("[razorpay] Create link failed:", await res.text());
       return null;
     }
- 
+
     const data = await res.json();
     console.log(`[razorpay] Created payment link: ${data.short_url} for user ${userId}`);
     return data.short_url;
@@ -720,7 +1000,6 @@ async function uploadToR2(buffer, mimeType, phone) {
 // SUPABASE HELPERS
 // ═══════════════════════════════════════════════════════════════
 async function getOrCreateUser(phone) {
-  // users table column is phone_number (not phone)
   const { data: existing } = await db()
     .from("users")
     .select("id")
@@ -781,7 +1060,9 @@ Respond in this EXACT JSON format (no markdown, no code fences):
   "tags": ["tag1", "tag2", "tag3"],
   "amount": "total amount if visible e.g. '1584' or null",
   "organization": "vendor/issuer name if visible or null",
-  "language": "primary language e.g. 'en', 'hi', 'te'"
+  "language": "primary language e.g. 'en', 'hi', 'te'",
+  "expiry_date": "ISO 8601 date if expiry/validity date found, e.g. '2026-12-31', or null",
+  "due_date": "ISO 8601 date if payment due date found, e.g. '2026-04-15', or null"
 }
 
 Rules:
@@ -789,7 +1070,9 @@ Rules:
 - For bills/receipts, include amounts, dates, vendor names
 - Title should be human-readable and specific
 - Tags should include: document type, vendor/issuer if visible, month/year if visible
-- If text is unreadable, set text to "" and category to "other"`;
+- If text is unreadable, set text to "" and category to "other"
+- IMPORTANT: Look for expiry dates (valid until, expires on, validity, best before) and due dates (due by, pay before, last date, deadline)
+- Return dates in ISO 8601 format (YYYY-MM-DD)`;
 
   const raw = await callGemini([
     { inlineData: { mimeType, data: base64Data } },
@@ -807,9 +1090,11 @@ Rules:
       amount: parsed.amount || null,
       organization: parsed.organization || null,
       language: parsed.language || null,
+      expiry_date: parsed.expiry_date || null,
+      due_date: parsed.due_date || null,
     };
   } catch (e) {
-    return { text: raw, category: "other", title: "Untitled Document", tags: [], amount: null, organization: null, language: null };
+    return { text: raw, category: "other", title: "Untitled Document", tags: [], amount: null, organization: null, language: null, expiry_date: null, due_date: null };
   }
 }
 
@@ -842,7 +1127,8 @@ Rules:
 - Parse Indian date formats: "kal" = tomorrow, "parso" = day after tomorrow
 - Parse times: "subah 8 baje" = 08:00, "shaam 5 baje" = 17:00
 - If unsure between note and search, pick "search"
-- reminder_datetime must be valid ISO 8601`;
+- reminder_datetime must be valid ISO 8601
+- Default time zone is IST (UTC+5:30)`;
 
   const raw = await callGemini([{ text: prompt }]);
 
