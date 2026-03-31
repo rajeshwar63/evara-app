@@ -213,6 +213,12 @@ async function routeMessage(message, from, senderName) {
 // GREETING
 // ═══════════════════════════════════════════════════════════════
 async function sendGreeting(from, senderName) {
+  try {
+    await getOrCreateUser(from);
+  } catch (err) {
+    console.error(`[greeting] Failed to create user for ${from}:`, err);
+  }
+
   const name = senderName?.split(" ")[0] || "there";
   const welcome = `👋 Hi ${name}! I'm *Evara* — your document organizer on WhatsApp.
 
