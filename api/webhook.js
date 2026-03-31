@@ -33,6 +33,36 @@ const CATEGORY_ICONS = {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// IN-MEMORY SEARCH SESSION CACHE (per-user, auto-expires 10 min)
+// ═══════════════════════════════════════════════════════════════
+// Key: phone number, Value: { results: [...], query: "...", timestamp: Date.now() }
+const searchSessions = new Map();
+const SEARCH_SESSION_TTL = 10 * 60 * 1000; // 10 minutes
+
+function setSearchSession(phone, query, results) {
+  searchSessions.set(phone, {
+    query,
+    results,
+    timestamp: Date.now(),
+  });
+}
+
+function getSearchSession(phone) {
+  const session = searchSessions.get(phone);
+  if (!session) return null;
+  // Expired?
+  if (Date.now() - session.timestamp > SEARCH_SESSION_TTL) {
+    searchSessions.delete(phone);
+    return null;
+  }
+  return session;
+}
+
+function clearSearchSession(phone) {
+  searchSessions.delete(phone);
+}
+
+// ═══════════════════════════════════════════════════════════════
 // LAZY CLIENTS
 // ═══════════════════════════════════════════════════════════════
 let _supabase = null;
@@ -277,14 +307,11 @@ async function handleMedia(from, media, type, messageId) {
     if (media.caption) reply += `\n📎 Your note: _${media.caption}_`;
 
     // ── AUTO-REMINDER from document dates (Smart plan feature preview) ──
-    // Even for free/pro users, we extract and mention dates found.
-    // Auto-reminder creation is gated to Smart plan.
     if (ocr.expiry_date || ocr.due_date) {
       const dateFound = ocr.expiry_date || ocr.due_date;
       const dateLabel = ocr.expiry_date ? "Expiry date" : "Due date";
       reply += `\n\n📅 *${dateLabel} detected:* ${dateFound}`;
 
-      // Check user plan for auto-reminder
       const { data: userData } = await db()
         .from("users")
         .select("plan")
@@ -292,20 +319,16 @@ async function handleMedia(from, media, type, messageId) {
         .single();
 
       if (userData && (userData.plan === "individual" || userData.plan === "smart" || userData.plan === "family")) {
-        // Auto-create reminder 7 days before expiry, or on due date
         try {
           const targetDate = new Date(dateFound);
           let reminderDate;
           if (ocr.expiry_date) {
-            // Remind 7 days before expiry
             reminderDate = new Date(targetDate.getTime() - 7 * 24 * 60 * 60 * 1000);
           } else {
-            // Remind on due date morning (9 AM IST)
             reminderDate = new Date(targetDate);
-            reminderDate.setHours(3, 30, 0, 0); // 9 AM IST = 3:30 UTC
+            reminderDate.setHours(3, 30, 0, 0);
           }
 
-          // Only create if reminder date is in the future
           if (reminderDate > new Date()) {
             await db().from("reminders").insert({
               user_id: userId,
@@ -363,11 +386,33 @@ async function handleMedia(from, media, type, messageId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// TEXT INPUT HANDLER  (updated with reminder reply handling)
+// TEXT INPUT HANDLER  (updated with search pick + reminder reply)
 // ═══════════════════════════════════════════════════════════════
 async function handleTextInput(from, text, messageId) {
   const userId = await getOrCreateUser(from);
   const lower = text.toLowerCase().trim();
+
+  // ── CHECK: Is this a number picking from search results? ──
+  // Must be checked EARLY, before anything else interprets "1", "2", etc.
+  const pickMatch = lower.match(/^(\d+)$/);
+  if (pickMatch) {
+    const pickNum = parseInt(pickMatch[1], 10);
+    const session = getSearchSession(from);
+    if (session && pickNum >= 1 && pickNum <= session.results.length) {
+      await handleSearchPick(from, session, pickNum);
+      return;
+    }
+    // No active session or out of range — fall through to normal flow
+  }
+
+  // ── CHECK: "all" to get all documents from search results ──
+  if (lower === "all") {
+    const session = getSearchSession(from);
+    if (session) {
+      await handleSearchPickAll(from, session);
+      return;
+    }
+  }
 
   // "plan" / "upgrade" → show plan info
   const planPattern = /^(plan|upgrade|my plan|subscription|billing|usage|limit|status)$/i;
@@ -419,10 +464,8 @@ async function handleTextInput(from, text, messageId) {
   }
 
   // ── CHECK: Is this a reply to an active reminder? ──
-  // Quick check for common reminder reply words before hitting Gemini
   const reminderReplyPattern = /\b(done|completed|finish|ho gaya|kar diya|kar liya|hogaya|complete|cancel|stop|band|snooze|later|not now|baad me|kal|remind me)\b/i;
   if (reminderReplyPattern.test(lower)) {
-    // Check if user has any active reminders
     const { data: activeReminders } = await db()
       .from("reminders")
       .select("id, message, status, notification_count")
@@ -432,7 +475,6 @@ async function handleTextInput(from, text, messageId) {
       .limit(5);
 
     if (activeReminders && activeReminders.length > 0) {
-      // Use Gemini to classify the reminder reply
       const handled = await handleReminderReply(from, userId, text, activeReminders);
       if (handled) return;
     }
@@ -449,11 +491,92 @@ async function handleTextInput(from, text, messageId) {
   }
 
   // Everything else → search
+  // Clear any old search session when user does a NEW search
+  clearSearchSession(from);
   await handleSearch(from, userId, text);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// REMINDER REPLY HANDLER (NEW)
+// SEARCH PICK HANDLER — user replied with a number
+// ═══════════════════════════════════════════════════════════════
+async function handleSearchPick(from, session, pickNum) {
+  const doc = session.results[pickNum - 1];
+  if (!doc) {
+    await sendText(from, `⚠️ Invalid number. Please pick between 1 and ${session.results.length}.`);
+    return;
+  }
+
+  const icon = doc.document_type === "photo" ? "📸"
+    : doc.document_type === "pdf" ? "📄"
+    : doc.document_type === "text_note" ? "📝" : "📎";
+
+  // For text notes (no file), send the text content
+  if (doc.document_type === "text_note" || !doc.file_key) {
+    const preview = doc.extracted_text || "(no content)";
+    await sendText(from,
+      `${icon} *${doc.title || "Untitled"}*\n\n` +
+      `${preview.substring(0, 1000)}${preview.length > 1000 ? "..." : ""}`
+    );
+    // Clear session after retrieval
+    clearSearchSession(from);
+    return;
+  }
+
+  // For files (images/PDFs), send the actual file
+  try {
+    const fileUrl = await getFileUrl(doc.file_key);
+    if (fileUrl) {
+      await sendMediaMessage(from, fileUrl, doc.file_type, doc.title || "Document");
+    } else {
+      await sendText(from, `❌ Could not retrieve the file. It may have been deleted.`);
+    }
+  } catch (err) {
+    console.error("[searchPick] Failed to send file:", err);
+    await sendText(from, `❌ Failed to retrieve the document. Please try again.`);
+  }
+
+  // Clear session after retrieval
+  clearSearchSession(from);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SEARCH PICK ALL — user replied "all"
+// ═══════════════════════════════════════════════════════════════
+async function handleSearchPickAll(from, session) {
+  const fileDocs = session.results.filter((d) => d.file_key);
+  const textDocs = session.results.filter((d) => !d.file_key);
+
+  // Send text notes inline
+  for (const doc of textDocs) {
+    const preview = doc.extracted_text || "(no content)";
+    await sendText(from,
+      `📝 *${doc.title || "Untitled"}*\n\n` +
+      `${preview.substring(0, 500)}${preview.length > 500 ? "..." : ""}`
+    );
+  }
+
+  // Send files (max 5 to avoid flooding)
+  const toSend = fileDocs.slice(0, 5);
+  for (const doc of toSend) {
+    try {
+      const fileUrl = await getFileUrl(doc.file_key);
+      if (fileUrl) {
+        await sendMediaMessage(from, fileUrl, doc.file_type, doc.title || "Document");
+      }
+    } catch (err) {
+      console.error("[searchPickAll] Failed to send file:", err);
+    }
+  }
+
+  if (fileDocs.length > 5) {
+    await sendText(from, `📎 Sent 5 of ${fileDocs.length} files. Use *my docs* to see all.`);
+  }
+
+  clearSearchSession(from);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REMINDER REPLY HANDLER
 // ═══════════════════════════════════════════════════════════════
 async function handleReminderReply(from, userId, text, activeReminders) {
   try {
@@ -494,7 +617,7 @@ Rules:
     const result = JSON.parse(cleaned);
 
     if (result.action === "not_reminder_reply") {
-      return false; // Let the normal flow handle it
+      return false;
     }
 
     const reminderId = result.reminder_id;
@@ -582,12 +705,12 @@ Rules:
     }
   } catch (err) {
     console.error("[reminderReply] Error:", err);
-    return false; // Fall through to normal flow
+    return false;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SHOW ACTIVE REMINDERS (NEW)
+// SHOW ACTIVE REMINDERS
 // ═══════════════════════════════════════════════════════════════
 async function sendActiveReminders(from, userId) {
   try {
@@ -641,7 +764,7 @@ async function sendActiveReminders(from, userId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// REMINDER HANDLER (updated to include status field)
+// REMINDER HANDLER
 // ═══════════════════════════════════════════════════════════════
 async function handleReminder(from, userId, rawText, intent) {
   try {
@@ -714,6 +837,9 @@ async function handleNote(from, userId, text, title) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// SEARCH HANDLER (updated: numbered list for >2 results)
+// ═══════════════════════════════════════════════════════════════
 async function handleSearch(from, userId, query) {
   try {
     const words = query.split(/\s+/).filter((w) => w.length > 2).slice(0, 5);
@@ -731,7 +857,7 @@ async function handleSearch(from, userId, query) {
       .eq("user_id", userId)
       .or(orConditions)
       .order("created_at", { ascending: false })
-      .limit(5);
+      .limit(10);
 
     if (error) throw error;
 
@@ -744,7 +870,43 @@ async function handleSearch(from, userId, query) {
       return;
     }
 
-    let reply = `🔍 Found *${results.length}* result${results.length > 1 ? "s" : ""} for *"${query}"*:\n\n`;
+    // ── 1 or 2 results: send directly (old behavior) ──
+    if (results.length <= 2) {
+      let reply = `🔍 Found *${results.length}* result${results.length > 1 ? "s" : ""} for *"${query}"*:\n\n`;
+
+      for (let i = 0; i < results.length; i++) {
+        const doc = results[i];
+        const date = new Date(doc.created_at).toLocaleDateString("en-IN", {
+          day: "numeric", month: "short", year: "numeric",
+        });
+        const icon = doc.document_type === "photo" ? "📸"
+          : doc.document_type === "pdf" ? "📄"
+          : doc.document_type === "text_note" ? "📝" : "📎";
+        const title = doc.title || "Untitled";
+
+        reply += `${i + 1}. ${icon} *${title}*\n`;
+        reply += `   📁 ${doc.category || doc.document_type} · ${date}\n\n`;
+      }
+
+      await sendText(from, reply.trim());
+
+      // Send files directly
+      const fileDocs = results.filter((d) => d.file_key);
+      for (const doc of fileDocs) {
+        try {
+          const fileUrl = await getFileUrl(doc.file_key);
+          if (fileUrl) {
+            await sendMediaMessage(from, fileUrl, doc.file_type, doc.title || "Document");
+          }
+        } catch (err) {
+          console.error("[search] Failed to send file:", err);
+        }
+      }
+      return;
+    }
+
+    // ── 3+ results: show numbered list, wait for pick ──
+    let reply = `🔍 Found *${results.length}* results for *"${query}"*:\n\n`;
 
     for (let i = 0; i < results.length; i++) {
       const doc = results[i];
@@ -756,23 +918,17 @@ async function handleSearch(from, userId, query) {
         : doc.document_type === "text_note" ? "📝" : "📎";
       const title = doc.title || "Untitled";
 
-      reply += `${i + 1}. ${icon} *${title}*\n`;
-      reply += `   📁 ${doc.category || doc.document_type} · ${date}\n\n`;
+      reply += `*${i + 1}.* ${icon} ${title}\n`;
+      reply += `    📁 ${doc.category || doc.document_type} · ${date}\n\n`;
     }
+
+    reply += `👆 *Reply with a number* to get that document.\n`;
+    reply += `Or reply *all* to get everything.`;
+
+    // Store session for this user
+    setSearchSession(from, query, results);
 
     await sendText(from, reply.trim());
-
-    const fileDocs = results.filter((d) => d.file_key).slice(0, 3);
-    for (const doc of fileDocs) {
-      try {
-        const fileUrl = await getFileUrl(doc.file_key);
-        if (fileUrl) {
-          await sendMediaMessage(from, fileUrl, doc.file_type, doc.title || "Document");
-        }
-      } catch (err) {
-        console.error("[search] Failed to send file:", err);
-      }
-    }
     return;
   } catch (err) {
     console.error("[search] Failed:", err);
