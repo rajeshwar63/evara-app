@@ -299,15 +299,29 @@ async function handleMedia(from, media, type, messageId) {
         text: fallbackTitle,  // Store title as extracted_text so search works
         category: "other",
         title: fallbackTitle,
+        person_name: null,
+        document_number: null,
         tags: fallbackTags,
         amount: null,
         organization: null,
         language: null,
         expiry_date: null,
         due_date: null,
+        search_keywords: fallbackTags.join(" "),
       };
     }
     const ocr = ocrData;
+
+    // Build search_keywords: use Gemini's if available, otherwise build from available fields
+    const searchKeywords = (ocr.search_keywords || "").trim()
+      || [
+        ocr.person_name,
+        ocr.title,
+        ocr.category,
+        ocr.organization,
+        ocr.document_number,
+        ...(ocr.tags || []),
+      ].filter(Boolean).join(" ").toLowerCase();
 
     const { data: docRow, error } = await db()
       .from("documents")
@@ -320,8 +334,10 @@ async function handleMedia(from, media, type, messageId) {
         extracted_text: ocr.text,
         amount: ocr.amount || null,
         organization: ocr.organization || null,
+        person_name: ocr.person_name || null,
         language_detected: ocr.language || null,
         tags: ocr.tags,
+        search_keywords: searchKeywords,
         message_type: type === "document" ? "pdf" : type,
         file_url: url,
         file_key: key,
@@ -898,16 +914,18 @@ async function handleNote(from, userId, text, title) {
   try {
     const cleanText = text.replace(/^note\s*:\s*/i, "").trim();
 
+    const noteTitle = title || cleanText.substring(0, 50);
     const { error } = await db()
       .from("documents")
       .insert({
         user_id: userId,
         category: "note",
-        title: title || cleanText.substring(0, 50),
+        title: noteTitle,
         document_type: "text_note",
         extracted_text: cleanText,
         message_type: "text_note",
         file_size_bytes: Buffer.byteLength(cleanText, "utf-8"),
+        search_keywords: `${noteTitle} note ${cleanText.substring(0, 200)}`.toLowerCase(),
       });
 
     if (error) throw error;
@@ -940,25 +958,36 @@ async function handleSearch(from, userId, query) {
       return;
     }
 
-    // Search across title, extracted_text, category, and organization
-    // Note: tags is a JSON array — PostgREST .or() doesn't support ::text cast on it
-    // Tags are already reflected in title/extracted_text from OCR, so this covers them
-    const orConditions = words.flatMap((w) => [
-      `extracted_text.ilike.%${w}%`,
-      `title.ilike.%${w}%`,
-      `category.ilike.%${w}%`,
-      `organization.ilike.%${w}%`,
-    ]).join(",");
+    // Strategy: AND-match all keywords against search_keywords first.
+    // If search_keywords is empty (old docs), fall back to title + extracted_text.
+    // We fetch candidates using the first keyword, then AND-filter in JS.
 
-    const { data: results, error } = await db()
+    // Step 1: Fetch candidate documents (broader query using first keyword)
+    const primaryWord = words[0];
+    const { data: candidates, error } = await db()
       .from("documents")
-      .select("id, document_type, category, title, extracted_text, created_at, file_key, file_type")
+      .select("id, document_type, category, title, extracted_text, created_at, file_key, file_type, search_keywords, person_name, organization")
       .eq("user_id", userId)
-      .or(orConditions)
+      .or(`search_keywords.ilike.%${primaryWord}%,title.ilike.%${primaryWord}%,extracted_text.ilike.%${primaryWord}%,person_name.ilike.%${primaryWord}%`)
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(50);
 
     if (error) throw error;
+
+    // Step 2: AND-filter — every keyword must appear somewhere in the document
+    const results = (candidates || []).filter((doc) => {
+      // Build a combined searchable string for this document
+      const searchable = [
+        doc.search_keywords || "",
+        doc.title || "",
+        doc.person_name || "",
+        doc.organization || "",
+        doc.category || "",
+        doc.extracted_text || "",
+      ].join(" ").toLowerCase();
+
+      return words.every((w) => searchable.includes(w.toLowerCase()));
+    }).slice(0, 10);
 
     await db()
       .from("search_log")
@@ -1555,26 +1584,32 @@ async function ocrDocument(base64Data, mimeType, filename) {
 ${filename ? `\nFilename: ${filename}` : ""}
 NOTE: For PDFs, you may only see the first page. Extract what you can and classify based on that.
 
-Extract ALL text from this document. Then classify it.
+Extract ALL text from this document. Then classify it and extract structured metadata.
 
 Respond in this EXACT JSON format (no markdown, no code fences):
 {
   "text": "full extracted text here",
   "category": "one of: identity, medical, financial, education, receipt, legal, insurance, travel, note, other",
-  "title": "short descriptive title like 'Electricity Bill - March 2026' or 'Aadhaar Card'",
+  "title": "specific descriptive title — MUST include person name if visible, e.g. 'PAN Card - Raja Rajeshwara Rao', 'Electricity Bill - March 2026 - Ravi Kumar', 'Aadhaar Card - Priya Sharma'",
+  "person_name": "full name of the person this document belongs to, or null if not visible",
+  "document_number": "primary ID number on the document (PAN number, Aadhaar number, policy number, invoice number, roll number, registration number, etc.) or null",
   "tags": ["tag1", "tag2", "tag3"],
   "amount": "total amount if visible e.g. '1584' or null",
-  "organization": "vendor/issuer name if visible or null",
+  "organization": "vendor/issuer/institution name if visible or null",
   "language": "primary language e.g. 'en', 'hi', 'te'",
   "expiry_date": "ISO 8601 date if expiry/validity date found, e.g. '2026-12-31', or null",
-  "due_date": "ISO 8601 date if payment due date found, e.g. '2026-04-15', or null"
+  "due_date": "ISO 8601 date if payment due date found, e.g. '2026-04-15', or null",
+  "search_keywords": "a flat lowercase string of the most important searchable terms for this document — include: person name, document type, category, organization, document number, key dates, key amounts. Example: 'raja rajeshwara rao pan card identity income tax department aqopr9257j'. This field will be used for keyword search, so include all terms a user might type to find this document."
 }
 
 Rules:
 - Extract text in whatever language it appears (Hindi, Telugu, English, etc.)
+- person_name: Extract the OWNER/SUBJECT of the document, not the issuer. For ID cards, this is the card holder. For bills, this is the customer. For medical records, this is the patient.
+- document_number: The primary identifying number on the document. For PAN cards = PAN number, for Aadhaar = Aadhaar number, for bills = bill/invoice number, for insurance = policy number, for education = roll number or registration number.
+- title MUST include the person's name if visible. Format: "[Document Type] - [Person Name]" or "[Document Type] - [Key Detail] - [Person Name]"
 - For bills/receipts, include amounts, dates, vendor names
-- Title should be human-readable and specific
-- Tags should include: document type, vendor/issuer if visible, month/year if visible
+- Tags should include: document type, vendor/issuer if visible, person name if visible, month/year if visible
+- search_keywords must be lowercase and include ALL important searchable terms
 - If text is unreadable, set text to "" and category to "other"
 - IMPORTANT: Look for expiry dates (valid until, expires on, validity, best before) and due dates (due by, pay before, last date, deadline)
 - Return dates in ISO 8601 format (YYYY-MM-DD)`;
@@ -1591,15 +1626,18 @@ Rules:
       text: parsed.text || "",
       category: parsed.category || "other",
       title: parsed.title || "Untitled Document",
+      person_name: parsed.person_name || null,
+      document_number: parsed.document_number || null,
       tags: Array.isArray(parsed.tags) ? parsed.tags : [],
       amount: parsed.amount || null,
       organization: parsed.organization || null,
       language: parsed.language || null,
       expiry_date: parsed.expiry_date || null,
       due_date: parsed.due_date || null,
+      search_keywords: parsed.search_keywords || null,
     };
   } catch (e) {
-    return { text: raw, category: "other", title: "Untitled Document", tags: [], amount: null, organization: null, language: null, expiry_date: null, due_date: null };
+    return { text: raw, category: "other", title: "Untitled Document", person_name: null, document_number: null, tags: [], amount: null, organization: null, language: null, expiry_date: null, due_date: null, search_keywords: null };
   }
 }
 
