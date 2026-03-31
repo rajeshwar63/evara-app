@@ -343,6 +343,94 @@
       transform: translateX(-50%) translateY(0);
     }
 
+    /* ─── OTP Verification Screen ─── */
+    .otp-container {
+      text-align: center;
+      padding: 60px 24px;
+      max-width: 400px;
+      margin: 0 auto;
+    }
+    .otp-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+    }
+    .otp-title {
+      font-family: 'DM Serif Display', serif;
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+    }
+    .otp-subtitle {
+      color: var(--ink-light);
+      font-size: 0.95rem;
+      line-height: 1.6;
+      margin-bottom: 28px;
+    }
+    .otp-btn {
+      background: var(--green);
+      color: white;
+      border: none;
+      padding: 14px 32px;
+      border-radius: 50px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s;
+      width: 100%;
+      max-width: 300px;
+    }
+    .otp-btn:hover { background: var(--green-dark); }
+    .otp-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .otp-inputs {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-bottom: 24px;
+    }
+    .otp-input {
+      width: 48px;
+      height: 56px;
+      text-align: center;
+      font-size: 1.4rem;
+      font-weight: 700;
+      font-family: 'DM Sans', monospace;
+      border: 2px solid #ddd;
+      border-radius: 12px;
+      outline: none;
+      transition: border-color 0.2s;
+      background: var(--card-bg);
+    }
+    .otp-input:focus { border-color: var(--green); }
+    .otp-error {
+      color: #e74c3c;
+      font-size: 0.88rem;
+      margin-bottom: 16px;
+      min-height: 1.2em;
+    }
+    .otp-resend {
+      margin-top: 20px;
+      font-size: 0.88rem;
+      color: var(--ink-light);
+    }
+    .otp-resend-btn {
+      background: none;
+      border: none;
+      color: var(--green-dark);
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.88rem;
+      text-decoration: underline;
+    }
+    .otp-resend-btn:disabled {
+      color: #aaa;
+      cursor: not-allowed;
+      text-decoration: none;
+    }
+
     /* ─── Responsive ─── */
     @media (max-width: 600px) {
       .container { padding: 16px 12px 60px; }
@@ -354,6 +442,8 @@
       .doc-body { padding: 10px 12px 14px; }
       .doc-title { font-size: 0.85rem; }
       .header { padding: 12px 16px; }
+      .otp-container { padding: 40px 16px; }
+      .otp-input { width: 42px; height: 48px; font-size: 1.2rem; }
     }
   </style>
 </head>
@@ -375,6 +465,8 @@
     const API_BASE = '/api/docs';
     const token = new URLSearchParams(window.location.search).get('token');
     let documents = [];
+    let sessionToken = null;
+    let resendTimer = null;
 
     // ─── Category icons ───
     const CATEGORY_ICONS = {
@@ -384,19 +476,225 @@
     };
 
     // ─── Init ───
-    (async function init() {
-      const content = document.getElementById('content');
-
+    (function init() {
       if (!token) {
         showError();
         return;
       }
+      showOtpScreen();
+    })();
 
+    // ─── OTP Screen ───
+    function showOtpScreen(message) {
+      const content = document.getElementById('content');
+      document.getElementById('stats-bar').style.display = 'none';
+      content.innerHTML = `
+        <div class="otp-container">
+          <div class="otp-icon">\u{1F510}</div>
+          <div class="otp-title">Verify Your Identity</div>
+          <div class="otp-subtitle">
+            ${message || "We'll send a verification code to your WhatsApp."}
+          </div>
+          <button class="otp-btn" id="send-otp-btn" onclick="sendOtp()">Send Verification Code</button>
+        </div>`;
+    }
+
+    // ─── Send OTP ───
+    async function sendOtp() {
+      const btn = document.getElementById('send-otp-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+
+      try {
+        const res = await fetch('/api/dashboard-send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          if (res.status === 429) {
+            showOtpInput('Code already sent. Please check your WhatsApp.');
+          } else {
+            showError(data.error);
+          }
+          return;
+        }
+
+        showOtpInput();
+      } catch (e) {
+        showError('Something went wrong. Please try again.');
+      }
+    }
+
+    // ─── OTP Input Screen ───
+    function showOtpInput(errorMsg) {
+      const content = document.getElementById('content');
+      content.innerHTML = `
+        <div class="otp-container">
+          <div class="otp-icon">\u{1F4F2}</div>
+          <div class="otp-title">Enter Verification Code</div>
+          <div class="otp-subtitle">Enter the 6-digit code sent to your WhatsApp:</div>
+          <div class="otp-inputs">
+            <input class="otp-input" type="text" inputmode="numeric" maxlength="1" data-idx="0" autofocus>
+            <input class="otp-input" type="text" inputmode="numeric" maxlength="1" data-idx="1">
+            <input class="otp-input" type="text" inputmode="numeric" maxlength="1" data-idx="2">
+            <input class="otp-input" type="text" inputmode="numeric" maxlength="1" data-idx="3">
+            <input class="otp-input" type="text" inputmode="numeric" maxlength="1" data-idx="4">
+            <input class="otp-input" type="text" inputmode="numeric" maxlength="1" data-idx="5">
+          </div>
+          <div class="otp-error" id="otp-error">${errorMsg || ''}</div>
+          <button class="otp-btn" id="verify-otp-btn" onclick="verifyOtp()" disabled>Verify</button>
+          <div class="otp-resend">
+            Didn't receive it?
+            <button class="otp-resend-btn" id="resend-btn" disabled onclick="resendOtp()">Resend code (<span id="resend-timer">60</span>s)</button>
+          </div>
+        </div>`;
+
+      setupOtpInputs();
+      startResendTimer();
+    }
+
+    // ─── OTP Input Behavior ───
+    function setupOtpInputs() {
+      const inputs = document.querySelectorAll('.otp-input');
+      inputs.forEach((input, idx) => {
+        input.addEventListener('input', (e) => {
+          const val = e.target.value.replace(/\D/g, '');
+          e.target.value = val.charAt(0) || '';
+          if (val && idx < 5) inputs[idx + 1].focus();
+          updateVerifyButton();
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Backspace' && !e.target.value && idx > 0) {
+            inputs[idx - 1].focus();
+          }
+        });
+        input.addEventListener('paste', (e) => {
+          e.preventDefault();
+          const paste = (e.clipboardData.getData('text') || '').replace(/\D/g, '').slice(0, 6);
+          paste.split('').forEach((ch, i) => {
+            if (inputs[i]) inputs[i].value = ch;
+          });
+          if (paste.length > 0) inputs[Math.min(paste.length, 5)].focus();
+          updateVerifyButton();
+        });
+      });
+      inputs[0].focus();
+    }
+
+    function getOtpValue() {
+      return Array.from(document.querySelectorAll('.otp-input')).map(i => i.value).join('');
+    }
+
+    function updateVerifyButton() {
+      const btn = document.getElementById('verify-otp-btn');
+      if (btn) btn.disabled = getOtpValue().length !== 6;
+    }
+
+    // ─── Verify OTP ───
+    async function verifyOtp() {
+      const otp = getOtpValue();
+      if (otp.length !== 6) return;
+
+      const btn = document.getElementById('verify-otp-btn');
+      btn.disabled = true;
+      btn.textContent = 'Verifying...';
+      document.getElementById('otp-error').textContent = '';
+
+      try {
+        const res = await fetch('/api/dashboard-verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, otp }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          document.getElementById('otp-error').textContent = data.error;
+          btn.disabled = false;
+          btn.textContent = 'Verify';
+          // Clear inputs on error
+          document.querySelectorAll('.otp-input').forEach(i => { i.value = ''; });
+          document.querySelectorAll('.otp-input')[0].focus();
+          return;
+        }
+
+        sessionToken = data.session_token;
+        loadDocuments();
+      } catch (e) {
+        document.getElementById('otp-error').textContent = 'Something went wrong. Please try again.';
+        btn.disabled = false;
+        btn.textContent = 'Verify';
+      }
+    }
+
+    // ─── Resend Timer ───
+    function startResendTimer() {
+      let seconds = 60;
+      const timerEl = document.getElementById('resend-timer');
+      const btn = document.getElementById('resend-btn');
+      if (resendTimer) clearInterval(resendTimer);
+
+      resendTimer = setInterval(() => {
+        seconds--;
+        if (timerEl) timerEl.textContent = seconds;
+        if (seconds <= 0) {
+          clearInterval(resendTimer);
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Resend code';
+          }
+        }
+      }, 1000);
+    }
+
+    async function resendOtp() {
+      const btn = document.getElementById('resend-btn');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      document.getElementById('otp-error').textContent = '';
+
+      try {
+        const res = await fetch('/api/dashboard-send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          document.getElementById('otp-error').textContent = data.error;
+          startResendTimer();
+          return;
+        }
+
+        document.querySelectorAll('.otp-input').forEach(i => { i.value = ''; });
+        document.querySelectorAll('.otp-input')[0].focus();
+        updateVerifyButton();
+        showToast('New code sent to your WhatsApp');
+        startResendTimer();
+      } catch (e) {
+        document.getElementById('otp-error').textContent = 'Failed to resend. Please try again.';
+        startResendTimer();
+      }
+    }
+
+    // ─── Load Documents (after OTP verified) ───
+    async function loadDocuments() {
+      const content = document.getElementById('content');
       showLoading();
       try {
         const res = await fetch(API_BASE, {
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'x-session-token': sessionToken,
+          }
         });
+        if (res.status === 401) {
+          showOtpScreen('Your session has expired. Please verify again.');
+          return;
+        }
         if (!res.ok) throw new Error('Unauthorized');
         const data = await res.json();
         documents = data.documents || [];
@@ -404,7 +702,7 @@
       } catch (e) {
         showError();
       }
-    })();
+    }
 
     // ─── Render ───
     function render() {
@@ -511,8 +809,16 @@
       try {
         const res = await fetch(`${API_BASE}?id=${docId}`, {
           method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'x-session-token': sessionToken,
+          }
         });
+        if (res.status === 401) {
+          document.querySelector('.overlay')?.remove();
+          showOtpScreen('Your session has expired. Please verify again.');
+          return;
+        }
         if (!res.ok) throw new Error('Failed');
 
         // Remove overlay
@@ -577,14 +883,14 @@
     }
 
     // ─── Error state ───
-    function showError() {
+    function showError(msg) {
       const content = document.getElementById('content');
       document.getElementById('stats-bar').style.display = 'none';
       content.innerHTML = `
         <div class="state-container">
-          <div class="state-icon">🔒</div>
+          <div class="state-icon">\u{1F512}</div>
           <div class="state-title">Link expired or invalid</div>
-          <div class="state-text">Send <strong>"my docs"</strong> on WhatsApp to get a new link.</div>
+          <div class="state-text">${msg || 'This link has expired. Please type <strong>"my docs"</strong> in Evara to get a new link.'}</div>
         </div>`;
     }
 
