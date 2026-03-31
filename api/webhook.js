@@ -249,11 +249,26 @@ async function handleMedia(from, media, type, messageId) {
       }
     } catch (ocrErr) {
       console.error("[media] OCR failed, saving with basic metadata:", ocrErr.message);
+      // Generate a human-readable title and searchable tags from filename
+      const rawName = media.filename || "Untitled Document";
+      const cleanTitle = rawName
+        .replace(/\.[^/.]+$/, "")          // remove extension
+        .replace(/[_\-]+/g, " ")           // underscores/dashes → spaces
+        .replace(/([a-z])([A-Z])/g, "$1 $2") // camelCase → spaces
+        .replace(/\s+/g, " ")
+        .trim();
+      const fallbackTitle = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
+      // Extract words from filename as tags so search can find it
+      const fallbackTags = cleanTitle
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length > 2);
+
       ocrData = {
-        text: "",
+        text: fallbackTitle,  // Store title as extracted_text so search works
         category: "other",
-        title: media.filename || "Untitled Document",
-        tags: [],
+        title: fallbackTitle,
+        tags: fallbackTags,
         amount: null,
         organization: null,
         language: null,
@@ -842,14 +857,21 @@ async function handleNote(from, userId, text, title) {
 // ═══════════════════════════════════════════════════════════════
 async function handleSearch(from, userId, query) {
   try {
-    const words = query.split(/\s+/).filter((w) => w.length > 2).slice(0, 5);
+    const words = query.split(/\s+/).filter((w) => w.length > 1).slice(0, 5);
 
     if (words.length === 0) {
-      await sendText(from, "🔍 Please use longer keywords to search.");
+      await sendText(from, "🔍 Please type a keyword to search (at least 2 letters).");
       return;
     }
 
-    const orConditions = words.map((w) => `extracted_text.ilike.%${w}%`).join(",");
+    // Search across title, extracted_text, category, organization, and tags
+    const orConditions = words.flatMap((w) => [
+      `extracted_text.ilike.%${w}%`,
+      `title.ilike.%${w}%`,
+      `category.ilike.%${w}%`,
+      `organization.ilike.%${w}%`,
+      `tags::text.ilike.%${w}%`,
+    ]).join(",");
 
     const { data: results, error } = await db()
       .from("documents")
