@@ -40,11 +40,11 @@ const BUCKET = process.env.R2_BUCKET || "evara-documents";
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, x-session-token");
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AUTH — verify dashboard token
+// AUTH — verify dashboard token + session token
 // ═══════════════════════════════════════════════════════════════
 async function authenticate(req) {
   const auth = req.headers.authorization;
@@ -59,6 +59,21 @@ async function authenticate(req) {
 
   if (error || !data) return null;
   if (new Date(data.expires_at) < new Date()) return null;
+
+  // Validate session token if provided
+  const sessionToken = req.headers["x-session-token"] || req.query.session_token;
+  if (sessionToken) {
+    const { data: session, error: sessErr } = await db()
+      .from("dashboard_sessions")
+      .select("dashboard_token, expires_at")
+      .eq("session_token", sessionToken)
+      .single();
+
+    if (sessErr || !session) return null;
+    if (new Date(session.expires_at) < new Date()) return null;
+    if (session.dashboard_token !== token) return null;
+  }
+
   return data.user_id;
 }
 
