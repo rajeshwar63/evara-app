@@ -33,33 +33,59 @@ const CATEGORY_ICONS = {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// IN-MEMORY SEARCH SESSION CACHE (per-user, auto-expires 10 min)
+// SEARCH SESSION — stored in Supabase for cross-instance persistence
 // ═══════════════════════════════════════════════════════════════
-// Key: phone number, Value: { results: [...], query: "...", timestamp: Date.now() }
-const searchSessions = new Map();
-const SEARCH_SESSION_TTL = 10 * 60 * 1000; // 10 minutes
+// Uses `search_sessions` table: phone_number TEXT PK, query TEXT, results JSONB, created_at TIMESTAMPTZ
+// Sessions expire after 10 minutes (checked on read)
 
-function setSearchSession(phone, query, results) {
-  searchSessions.set(phone, {
-    query,
-    results,
-    timestamp: Date.now(),
-  });
+const SEARCH_SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+async function setSearchSession(phone, query, results) {
+  // Store only the fields needed for retrieval (keep payload small)
+  const slim = results.map((r) => ({
+    id: r.id,
+    title: r.title,
+    document_type: r.document_type,
+    category: r.category,
+    extracted_text: (r.extracted_text || "").substring(0, 1000),
+    file_key: r.file_key,
+    file_type: r.file_type,
+  }));
+
+  await db()
+    .from("search_sessions")
+    .upsert({
+      phone_number: phone,
+      query,
+      results: slim,
+      created_at: new Date().toISOString(),
+    }, { onConflict: "phone_number" });
 }
 
-function getSearchSession(phone) {
-  const session = searchSessions.get(phone);
-  if (!session) return null;
-  // Expired?
-  if (Date.now() - session.timestamp > SEARCH_SESSION_TTL) {
-    searchSessions.delete(phone);
+async function getSearchSession(phone) {
+  const { data, error } = await db()
+    .from("search_sessions")
+    .select("query, results, created_at")
+    .eq("phone_number", phone)
+    .single();
+
+  if (error || !data) return null;
+
+  // Check TTL
+  const age = Date.now() - new Date(data.created_at).getTime();
+  if (age > SEARCH_SESSION_TTL_MS) {
+    await clearSearchSession(phone);
     return null;
   }
-  return session;
+
+  return { query: data.query, results: data.results };
 }
 
-function clearSearchSession(phone) {
-  searchSessions.delete(phone);
+async function clearSearchSession(phone) {
+  await db()
+    .from("search_sessions")
+    .delete()
+    .eq("phone_number", phone);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -412,7 +438,7 @@ async function handleTextInput(from, text, messageId) {
   const pickMatch = lower.match(/^(\d+)$/);
   if (pickMatch) {
     const pickNum = parseInt(pickMatch[1], 10);
-    const session = getSearchSession(from);
+    const session = await getSearchSession(from);
     if (session && pickNum >= 1 && pickNum <= session.results.length) {
       await handleSearchPick(from, session, pickNum);
       return;
@@ -422,7 +448,7 @@ async function handleTextInput(from, text, messageId) {
 
   // ── CHECK: "all" to get all documents from search results ──
   if (lower === "all") {
-    const session = getSearchSession(from);
+    const session = await getSearchSession(from);
     if (session) {
       await handleSearchPickAll(from, session);
       return;
@@ -507,7 +533,7 @@ async function handleTextInput(from, text, messageId) {
 
   // Everything else → search
   // Clear any old search session when user does a NEW search
-  clearSearchSession(from);
+  await clearSearchSession(from);
   await handleSearch(from, userId, text);
 }
 
@@ -533,7 +559,7 @@ async function handleSearchPick(from, session, pickNum) {
       `${preview.substring(0, 1000)}${preview.length > 1000 ? "..." : ""}`
     );
     // Clear session after retrieval
-    clearSearchSession(from);
+    await clearSearchSession(from);
     return;
   }
 
@@ -551,7 +577,7 @@ async function handleSearchPick(from, session, pickNum) {
   }
 
   // Clear session after retrieval
-  clearSearchSession(from);
+  await clearSearchSession(from);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -587,7 +613,7 @@ async function handleSearchPickAll(from, session) {
     await sendText(from, `📎 Sent 5 of ${fileDocs.length} files. Use *my docs* to see all.`);
   }
 
-  clearSearchSession(from);
+  await clearSearchSession(from);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -958,7 +984,7 @@ async function handleSearch(from, userId, query) {
     reply += `Or reply *all* to get everything.`;
 
     // Store session for this user
-    setSearchSession(from, query, results);
+    await setSearchSession(from, query, results);
 
     await sendText(from, reply.trim());
     return;
