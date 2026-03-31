@@ -11,6 +11,10 @@ const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
 const GREETING_PATTERNS = /^(hi|hello|hey|help|start|menu|namaste|hola)$/i;
+const REFERRAL_CODE_PATTERN = /^EV[A-Z0-9]{4}$/;
+const REFERRAL_PROGRAM_DEADLINE = new Date("2027-03-31T23:59:59+05:30");
+const REFERRAL_GRACE_DEADLINE = new Date("2027-04-30T23:59:59+05:30");
+const REFERRAL_MESSAGE_PATTERN = /^hi\s+i\s+was\s+referred\s+by\s+(EV[A-Z0-9]{4})$/i;
 
 const MIME_TO_EXT = {
   "image/jpeg": "jpg",
@@ -225,6 +229,7 @@ async function sendGreeting(from, senderName) {
 📂 *my docs* — manage your files
 📊 *plan* — check usage
 ⬆️ *upgrade* — go Pro for ₹299/year (all features!)
+🎁 *invite* — get Pro free by referring a friend
 🔒 *privacy* — how your data is protected
 
 Send me a document to get started!`;
@@ -411,13 +416,30 @@ async function handleMedia(from, media, type, messageId) {
       if (userData2.plan === "free" && scanCount >= 12) {
         const remaining = 15 - scanCount;
         if (remaining > 0) {
+          const referralTip = isReferralProgramActive()
+            ? `\n\nOr type *invite* to get Pro free by referring a friend!`
+            : ``;
           await sendText(from,
             `💡 You have *${remaining}* free scan${remaining === 1 ? '' : 's'} left this month.\n\n` +
-            `Upgrade to *Pro* for ₹299/year — unlimited scans, 1GB storage.\n` +
-            `Type *plan* to learn more.`
+            `Upgrade to *Pro* for ₹299/year — unlimited scans, 2GB storage.\n` +
+            `Type *plan* to learn more.` + referralTip
           );
         }
       }
+    }
+
+    // ── REFERRAL COMPLETION: check if this is the user's first scan with a pending referral ──
+    try {
+      await completeReferral(from, userId);
+    } catch (refErr) {
+      console.error("[media] Referral completion error:", refErr.message);
+    }
+
+    // ── ONE-TIME REFERRAL PROMPT after first scan ──
+    try {
+      await sendReferralPrompt(from, userId);
+    } catch (promptErr) {
+      console.error("[media] Referral prompt error:", promptErr.message);
     }
   } catch (err) {
     console.error(`[media] Failed for ${from}:`, err);
@@ -453,6 +475,25 @@ async function handleTextInput(from, text, messageId) {
       await handleSearchPickAll(from, session);
       return;
     }
+  }
+
+  // "invite" → referral invite command
+  if (lower === "invite" || lower === "refer" || lower === "referral") {
+    await handleInviteCommand(from, userId);
+    return;
+  }
+
+  // Referral code detection: "Hi I was referred by EVXXXX" pattern
+  const referralMatch = text.match(REFERRAL_MESSAGE_PATTERN);
+  if (referralMatch) {
+    await handleReferralCode(from, userId, referralMatch[1]);
+    return;
+  }
+
+  // Standalone referral code (EV + 4 alphanumeric chars)
+  if (REFERRAL_CODE_PATTERN.test(text.trim().toUpperCase())) {
+    await handleReferralCode(from, userId, text.trim());
+    return;
   }
 
   // "plan" / "upgrade" → show plan info
@@ -1107,6 +1148,10 @@ async function sendPlanInfo(from, userId) {
       msg += `\n💳 Pay securely: https://rzp.io/rzp/a1F4Ljhw\n\n`;
       msg += `After payment, send screenshot here and we'll activate Pro instantly.`;
     }
+
+    if (isReferralProgramActive()) {
+      msg += `\n\n💡 Tip: Type *invite* to get Pro free for a year by referring a friend!`;
+    }
   } else {
     msg += `\n\n✅ You're on Pro! All features unlocked. Enjoy!`;
   }
@@ -1208,6 +1253,252 @@ async function uploadToR2(buffer, mimeType, phone) {
   const url = `${process.env.R2_ENDPOINT}/${bucket}/${key}`;
   console.log(`[r2] Uploaded ${buffer.length} bytes → ${key}`);
   return { key, url };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REFERRAL SYSTEM
+// ═══════════════════════════════════════════════════════════════
+function isReferralProgramActive() {
+  return new Date() <= REFERRAL_PROGRAM_DEADLINE;
+}
+
+function isWithinGracePeriod() {
+  const now = new Date();
+  return now > REFERRAL_PROGRAM_DEADLINE && now <= REFERRAL_GRACE_DEADLINE;
+}
+
+async function generateReferralCode() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let code = "EV";
+    for (let i = 0; i < 4; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    // Check uniqueness
+    const { data } = await db()
+      .from("users")
+      .select("id")
+      .eq("referral_code", code)
+      .single();
+    if (!data) return code;
+  }
+  throw new Error("Failed to generate unique referral code after 10 attempts");
+}
+
+async function handleInviteCommand(from, userId) {
+  // Check if referral program is still active
+  if (!isReferralProgramActive()) {
+    const paymentLink = await createPaymentLink(userId, from);
+    const link = paymentLink || "https://rzp.io/rzp/a1F4Ljhw";
+    await sendText(from,
+      `Our referral program has ended. You can upgrade to Pro for ₹299/year.\n\n` +
+      `💳 Pay securely: ${link}`
+    );
+    return;
+  }
+
+  // Get or generate referral code
+  const { data: user } = await db()
+    .from("users")
+    .select("referral_code")
+    .eq("id", userId)
+    .single();
+
+  let referralCode = user?.referral_code;
+  if (!referralCode) {
+    referralCode = await generateReferralCode();
+    await db()
+      .from("users")
+      .update({ referral_code: referralCode })
+      .eq("id", userId);
+  }
+
+  const encodedText = encodeURIComponent(`Hi I was referred by ${referralCode}`);
+  const waLink = `https://wa.me/918309421405?text=${encodedText}`;
+
+  await sendText(from,
+    `📩 Share Evara with a friend!\n\n` +
+    `Here's your personal invite message — just forward it:\n\n` +
+    `---\n\n` +
+    `Hey! I use Evara to organize all my docs on WhatsApp — Aadhaar, PAN, insurance, bills, everything! 📄\n\n` +
+    `Try it free — just tap this link and say hi:\n` +
+    `${waLink}\n\n` +
+    `We'll BOTH get Pro features free for 1 year! 🎉`
+  );
+}
+
+async function handleReferralCode(from, userId, code) {
+  const upperCode = code.toUpperCase();
+
+  // Look up the referral code
+  const { data: referrer } = await db()
+    .from("users")
+    .select("id, phone_number, referral_code")
+    .eq("referral_code", upperCode)
+    .single();
+
+  if (!referrer) {
+    await sendText(from,
+      `Hmm, I didn't recognize that referral code. Please check and try again, or just send 'hi' to get started!`
+    );
+    return;
+  }
+
+  // Check if user is trying to use their own code
+  if (referrer.id === userId) {
+    await sendText(from, `That's your own referral code! Share it with a friend instead. 😊`);
+    return;
+  }
+
+  // Check if user already has documents (referral only valid before first scan)
+  const { count: docCount } = await db()
+    .from("documents")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId);
+
+  if (docCount > 0) {
+    await sendText(from, `Referral codes can only be used before your first scan.`);
+    return;
+  }
+
+  // Check if user was already referred
+  const { data: existingUser } = await db()
+    .from("users")
+    .select("referred_by")
+    .eq("id", userId)
+    .single();
+
+  if (existingUser?.referred_by) {
+    await sendText(from, `You've already used a referral code. Scan your first document to activate the reward!`);
+    return;
+  }
+
+  // Store referral
+  await db()
+    .from("users")
+    .update({ referred_by: upperCode })
+    .eq("id", userId);
+
+  await db()
+    .from("referrals")
+    .insert({
+      referrer_phone: referrer.phone_number,
+      invitee_phone: from,
+      referral_code: upperCode,
+      status: "pending",
+    });
+
+  await sendText(from,
+    `✅ Referral code accepted! Scan your first document and you'll both get Pro free for a year.`
+  );
+}
+
+async function completeReferral(from, userId) {
+  // Check if this user was referred and referral is pending
+  const { data: user } = await db()
+    .from("users")
+    .select("referred_by, phone_number")
+    .eq("id", userId)
+    .single();
+
+  if (!user?.referred_by) return;
+
+  const { data: referral } = await db()
+    .from("referrals")
+    .select("id, referrer_phone, status, created_at")
+    .eq("invitee_phone", user.phone_number)
+    .eq("status", "pending")
+    .single();
+
+  if (!referral) return;
+
+  // Check grace period: referrals created before deadline get 30-day grace
+  const now = new Date();
+  if (!isReferralProgramActive()) {
+    const referralCreatedAt = new Date(referral.created_at);
+    if (referralCreatedAt > REFERRAL_PROGRAM_DEADLINE || now > REFERRAL_GRACE_DEADLINE) {
+      return; // Outside program window and grace period
+    }
+  }
+
+  // Check document count — only complete on first scan (count should be exactly 1)
+  const { count: docCount } = await db()
+    .from("documents")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId);
+
+  if (docCount !== 1) return;
+
+  // Complete the referral
+  await db()
+    .from("referrals")
+    .update({ status: "completed", completed_at: now.toISOString() })
+    .eq("id", referral.id);
+
+  const oneYearFromNow = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+
+  // Upgrade invitee
+  await db()
+    .from("users")
+    .update({
+      plan: "individual",
+      plan_expires_at: oneYearFromNow.toISOString(),
+    })
+    .eq("id", userId);
+
+  // Upgrade referrer (don't overwrite if their expiry is already later)
+  const { data: referrerUser } = await db()
+    .from("users")
+    .select("id, plan_expires_at")
+    .eq("phone_number", referral.referrer_phone)
+    .single();
+
+  if (referrerUser) {
+    const existingExpiry = referrerUser.plan_expires_at ? new Date(referrerUser.plan_expires_at) : null;
+    const newExpiry = (!existingExpiry || existingExpiry < oneYearFromNow) ? oneYearFromNow : existingExpiry;
+
+    await db()
+      .from("users")
+      .update({
+        plan: "individual",
+        plan_expires_at: newExpiry.toISOString(),
+      })
+      .eq("id", referrerUser.id);
+  }
+
+  // Notify referrer
+  await sendText(referral.referrer_phone,
+    `🎉 Great news! Your friend just joined Evara and scanned their first document. You've both been upgraded to Pro for free! Enjoy unlimited scans, 2GB storage, and smart reminders.`
+  );
+
+  // Notify invitee
+  await sendText(from,
+    `🎉 Welcome to Evara Pro! Since you joined through a friend's referral, you get Pro free for 1 year. Enjoy unlimited scans, 2GB storage, and smart reminders.`
+  );
+}
+
+async function sendReferralPrompt(from, userId) {
+  const { data: user } = await db()
+    .from("users")
+    .select("referral_prompt_shown")
+    .eq("id", userId)
+    .single();
+
+  if (user?.referral_prompt_shown) return;
+
+  // Mark as shown
+  await db()
+    .from("users")
+    .update({ referral_prompt_shown: true })
+    .eq("id", userId);
+
+  if (!isReferralProgramActive()) return;
+
+  await sendText(from,
+    `🎉 You're on the Free plan. Want Pro features free for a whole year?\n\n` +
+    `Just share Evara with one friend. When they scan their first document, you BOTH get Pro free for 1 year!\n\n` +
+    `Type *invite* to get your personal invite link.`
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
