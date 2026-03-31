@@ -228,8 +228,6 @@ async function sendGreeting(from, senderName) {
 ⏰ *Remind me...* — sets a reminder
 📂 *my docs* — manage your files
 📊 *plan* — check usage
-⬆️ *upgrade* — go Pro for ₹299/year (all features!)
-🎁 *invite* — get Pro free by referring a friend
 🔒 *privacy* — how your data is protected
 
 Send me a document to get started!`;
