@@ -857,20 +857,30 @@ async function handleNote(from, userId, text, title) {
 // ═══════════════════════════════════════════════════════════════
 async function handleSearch(from, userId, query) {
   try {
-    const words = query.split(/\s+/).filter((w) => w.length > 1).slice(0, 5);
+    // Clean the query: strip file extensions, punctuation, and noise
+    const cleanedQuery = query
+      .replace(/\.(pdf|jpg|jpeg|png|webp|doc|docx)$/i, "")  // strip file extensions
+      .replace(/[^\w\s]/g, " ");  // punctuation → spaces
+    const words = cleanedQuery
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length > 1)
+      .filter((w) => !/^\d+$/.test(w))  // drop pure numbers like "4", "3"
+      .slice(0, 5);
 
     if (words.length === 0) {
       await sendText(from, "🔍 Please type a keyword to search (at least 2 letters).");
       return;
     }
 
-    // Search across title, extracted_text, category, organization, and tags
+    // Search across title, extracted_text, category, and organization
+    // Note: tags is a JSON array — PostgREST .or() doesn't support ::text cast on it
+    // Tags are already reflected in title/extracted_text from OCR, so this covers them
     const orConditions = words.flatMap((w) => [
       `extracted_text.ilike.%${w}%`,
       `title.ilike.%${w}%`,
       `category.ilike.%${w}%`,
       `organization.ilike.%${w}%`,
-      `tags::text.ilike.%${w}%`,
     ]).join(",");
 
     const { data: results, error } = await db()
