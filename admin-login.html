@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login — Evara</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green: #25D366;
+      --green-dark: #128C7E;
+      --green-light: #DCF8C6;
+      --ink: #1a1a2e;
+      --ink-light: #4a4a5a;
+      --cream: #faf9f6;
+      --warm: #f5f0e8;
+      --accent: #FF6B35;
+      --card-bg: #ffffff;
+      --radius: 16px;
+      --shadow: 0 4px 30px rgba(0,0,0,0.06);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      color: var(--ink);
+      background: var(--cream);
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 48px 40px;
+      max-width: 400px;
+      width: 90%;
+      text-align: center;
+    }
+    .logo {
+      font-family: 'DM Serif Display', serif;
+      font-size: 2rem;
+      color: var(--green-dark);
+      margin-bottom: 4px;
+    }
+    .logo span { color: var(--accent); }
+    .subtitle {
+      font-size: 0.9rem;
+      color: var(--ink-light);
+      margin-bottom: 32px;
+    }
+    .btn-google {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: white;
+      border: 2px solid var(--warm);
+      padding: 12px 28px;
+      border-radius: 50px;
+      font-size: 1rem;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--ink);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-google:hover {
+      border-color: var(--green-dark);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .btn-google:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .btn-google svg { width: 20px; height: 20px; }
+    .error-msg {
+      color: #e74c3c;
+      font-size: 0.85rem;
+      margin-top: 16px;
+      display: none;
+    }
+    .loading-msg {
+      color: var(--ink-light);
+      font-size: 0.9rem;
+      margin-top: 16px;
+    }
+
+    /* Spinner for auth check */
+    .spinner-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--warm);
+      border-top-color: var(--green-dark);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="login-card" id="login-card">
+    <!-- Shows spinner while checking existing session -->
+    <div id="loading-state" class="spinner-container">
+      <div class="spinner"></div>
+      <div class="loading-msg">Checking session...</div>
+    </div>
+
+    <!-- Login form (hidden until session check completes) -->
+    <div id="login-form" style="display: none;">
+      <div class="logo">evar<span>a</span></div>
+      <div class="subtitle">Admin Dashboard</div>
+      <button class="btn-google" id="btn-google" onclick="handleGoogleLogin()">
+        <svg viewBox="0 0 24 24">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+        </svg>
+        Sign in with Google
+      </button>
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script>
+    let supabaseClient = null;
+
+    // ─── Initialize Supabase client with persistent session config ───
+    async function initSupabase() {
+      const res = await fetch('/api/admin-config');
+      if (!res.ok) throw new Error('Failed to load config');
+      const config = await res.json();
+
+      supabaseClient = supabase.createClient(config.url, config.anonKey, {
+        auth: {
+          persistSession: true,
+          storageKey: 'evara-admin-auth',
+          autoRefreshToken: true,
+          detectSessionInUrl: true,
+        }
+      });
+    }
+
+    // ─── Check for existing session on page load ───
+    async function init() {
+      const loadingState = document.getElementById('loading-state');
+      const loginForm = document.getElementById('login-form');
+
+      try {
+        await initSupabase();
+
+        // Check for existing session (restored from localStorage)
+        const { data: { session } } = await supabaseClient.auth.getSession();
+
+        if (session) {
+          // Already logged in — redirect to admin dashboard
+          window.location.href = '/admin-dashboard.html';
+          return;
+        }
+
+        // Listen for auth state changes (handles OAuth callback redirect)
+        supabaseClient.auth.onAuthStateChange((_event, session) => {
+          if (session) {
+            window.location.href = '/admin-dashboard.html';
+          }
+        });
+      } catch (e) {
+        console.error('Init error:', e);
+      }
+
+      // No session — show login form
+      loadingState.style.display = 'none';
+      loginForm.style.display = 'block';
+    }
+
+    // ─── Google OAuth login ───
+    async function handleGoogleLogin() {
+      const btn = document.getElementById('btn-google');
+      const errorMsg = document.getElementById('error-msg');
+      errorMsg.style.display = 'none';
+      btn.disabled = true;
+      btn.querySelector('svg + *') || (btn.lastChild.textContent = 'Signing in...');
+
+      try {
+        const { error } = await supabaseClient.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: window.location.origin + '/admin-login.html',
+          }
+        });
+
+        if (error) throw error;
+      } catch (e) {
+        errorMsg.textContent = e.message || 'Login failed. Please try again.';
+        errorMsg.style.display = 'block';
+        btn.disabled = false;
+        btn.lastChild.textContent = 'Sign in with Google';
+      }
+    }
+
+    // ─── Start ───
+    init();
+  </script>
+</body>
+</html>
